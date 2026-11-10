@@ -2,7 +2,7 @@ import React, { useMemo } from 'react';
 import { Company, ForecastInputs, ValuationOutput, ResearchMemo } from '../../types/financial';
 import { solveImpliedGrowthRate, solveImpliedGrossMargin, solveImpliedCapYears, generateReverseSensitivityGrid } from '../../utils/dcfSolver';
 import { formatNumber, formatCurrency, formatPercent } from '../../utils/formatters';
-import { Target, AlertTriangle, Compass, CheckCircle2, BookOpen, Flame, ArrowRight, ShieldX, TrendingDown } from 'lucide-react';
+import { Target, AlertTriangle, Compass, CheckCircle2, BookOpen, Flame, ArrowRight, ShieldX, TrendingDown, Sparkles } from 'lucide-react';
 
 interface MarketImpliedStageProps {
   company: Company;
@@ -13,6 +13,7 @@ interface MarketImpliedStageProps {
   baseRevenue: number;
   memo: ResearchMemo;
   onOpenMemo: () => void;
+  onChangeInputs?: (newInputs: ForecastInputs) => void;
 }
 
 export const MarketImpliedStage: React.FC<MarketImpliedStageProps> = ({
@@ -23,7 +24,8 @@ export const MarketImpliedStage: React.FC<MarketImpliedStageProps> = ({
   baseAsp,
   baseRevenue,
   memo,
-  onOpenMemo
+  onOpenMemo,
+  onChangeInputs
 }) => {
   // Numerical Solver to find implied parameters for CURRENT market cap
   const impliedVolumeGrowth = useMemo(() => {
@@ -78,15 +80,25 @@ export const MarketImpliedStage: React.FC<MarketImpliedStageProps> = ({
 
   const growthGapVsUser = impliedVolumeGrowth - inputs.volumeGrowthYears1to5;
 
+  const handleCellClick = (growth: number, margin: number) => {
+    if (onChangeInputs) {
+      onChangeInputs({
+        ...inputs,
+        volumeGrowthYears1to5: growth,
+        targetGrossMargin: margin
+      });
+    }
+  };
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 animate-fadeIn">
       {/* Top Banner - Mauboussin Philosophy */}
       <div className="bg-gradient-to-r from-cyan-950/80 via-slate-900 to-slate-900 border border-cyan-800/50 rounded-2xl p-6 shadow-2xl">
         <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="text-xs font-mono uppercase tracking-wider text-cyan-400 font-semibold px-2 py-0.5 rounded bg-cyan-950 border border-cyan-800/60">
-                核心命题 ｜ 市场隐含预期反向工程 (Reverse DCF v3.0)
+                核心命题 ｜ 市场隐含预期反向工程 (Reverse DCF v3.1)
               </span>
               <span className="text-xs text-slate-400 font-serif italic">
                 “不是去预测未来，而是反问：当前价格到底需要多激进的假设才能成立？”
@@ -127,8 +139,14 @@ export const MarketImpliedStage: React.FC<MarketImpliedStageProps> = ({
               倒逼第5年规模需达到: <strong className="text-slate-200 font-mono">{formatNumber(impliedTerminalDeliveries)}</strong>
             </p>
             <p className="text-[11px] text-slate-500">
-              当前基准出货/交付量: {formatNumber(baseDeliveries)} (需净扩充 {(impliedTerminalDeliveries / baseDeliveries).toFixed(1)}x)
+              当前基准出货量: {formatNumber(baseDeliveries)} (需净扩充 {(impliedTerminalDeliveries / baseDeliveries).toFixed(1)}x)
             </p>
+            <div className="pt-2 border-t border-slate-850 flex items-center justify-between text-[11px] font-mono">
+              <span className="text-slate-400">我方模型假设: {formatPercent(inputs.volumeGrowthYears1to5)}</span>
+              <span className={`font-bold ${growthGapVsUser > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                预期差: {growthGapVsUser > 0 ? '+' : ''}{(growthGapVsUser * 100).toFixed(1)}%
+              </span>
+            </div>
           </div>
         </div>
 
@@ -149,6 +167,11 @@ export const MarketImpliedStage: React.FC<MarketImpliedStageProps> = ({
             <p className="text-[11px] text-slate-500">
               当前模型综合毛利率假设: {formatPercent(inputs.targetGrossMargin)}
             </p>
+            <div className="pt-2 border-t border-slate-850 text-[11px] font-mono text-slate-400">
+              毛利率安全空间: <strong className={inputs.targetGrossMargin >= impliedGrossMargin ? 'text-emerald-400' : 'text-rose-400'}>
+                {((inputs.targetGrossMargin - impliedGrossMargin) * 100).toFixed(1)}%
+              </strong>
+            </div>
           </div>
         </div>
 
@@ -167,13 +190,16 @@ export const MarketImpliedStage: React.FC<MarketImpliedStageProps> = ({
               Mauboussin 竞争均衡衰退模型反解：市场买入了公司在未来 <strong className="text-purple-200">{micap.capYears} 年</strong> 内持续享有超额投资回报（ROIC &gt; WACC）。
             </p>
             <p className="text-[11px] text-slate-500">
-              {micap.capYears > 12 ? '市场给予了极高科技护城河常青溢价' : '反映传统制造业 4-8 年周期均值'}
+              {micap.capYears > 12 ? '市场给予了极高科技护城河常青溢价' : '反映传统工业品 4-8 年周期均值'}
             </p>
+            <div className="pt-2 border-t border-slate-850 text-[11px] font-mono text-slate-400">
+              WACC 资本成本锚: {formatPercent(inputs.wacc)}
+            </div>
           </div>
         </div>
       </div>
 
-      {/* ROIC Fade Curve Table */}
+      {/* ROIC Fade Curve Table & Visual Chart */}
       <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl p-5">
         <div className="flex items-center justify-between pb-3 border-b border-slate-800">
           <div className="flex items-center gap-2">
@@ -211,15 +237,16 @@ export const MarketImpliedStage: React.FC<MarketImpliedStageProps> = ({
 
       {/* 2D Reverse DCF Heatmap: Volume CAGR vs Gross Margin */}
       <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
-        <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-850/50">
+        <div className="p-4 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2 bg-slate-850/50">
           <div className="flex items-center gap-2 text-xs text-slate-200 font-bold">
             <Flame className="w-4 h-4 text-cyan-400" />
-            <span>反向估值热力矩阵 (Reverse DCF Heatmap)：销量增速 vs. 目标毛利率 ➔ 对应股价</span>
+            <span>反向估值热力矩阵 (Reverse DCF Heatmap)：销量增速 vs. 目标毛利率 ➔ 对应每股公允价</span>
           </div>
           <div className="flex items-center gap-3 text-[11px] font-mono">
             <span className="flex items-center gap-1.5 text-cyan-400">
-              <span className="w-2.5 h-2.5 rounded bg-cyan-500/20 border border-cyan-400"></span> 当前股价对应锚点
+              <span className="w-2.5 h-2.5 rounded bg-cyan-950 border border-cyan-400"></span> 🎯 当前市价等高线锚点
             </span>
+            <span className="text-slate-500">点击任意单元格可一键载入模型</span>
           </div>
         </div>
 
@@ -250,13 +277,15 @@ export const MarketImpliedStage: React.FC<MarketImpliedStageProps> = ({
                       return (
                         <td
                           key={cell.growth}
-                          className={`py-2.5 px-3 font-semibold transition-all ${
+                          onClick={() => handleCellClick(cell.growth, margin)}
+                          className={`py-2.5 px-3 font-semibold transition-all cursor-pointer ${
                             isCurrentPriceAnchor
-                              ? 'bg-cyan-950 text-cyan-300 border-2 border-cyan-400 font-extrabold shadow-md'
+                              ? 'bg-cyan-950 text-cyan-300 border-2 border-cyan-400 font-black shadow-md'
                               : cell.sharePrice >= company.currentStockPrice
-                                ? 'text-emerald-400 hover:bg-emerald-950/20'
+                                ? 'text-emerald-400 hover:bg-emerald-950/30'
                                 : 'text-slate-400 hover:bg-slate-800/60'
                           }`}
+                          title={`点击将 增速=${(cell.growth * 100).toFixed(0)}%, 毛利率=${(margin * 100).toFixed(0)}% 载入模型`}
                         >
                           {formatCurrency(cell.sharePrice, company.currencySymbol, 1)}
                         </td>

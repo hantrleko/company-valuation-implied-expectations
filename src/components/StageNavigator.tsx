@@ -14,15 +14,15 @@ export const STAGES = [
     num: '01',
     label: '原始披露',
     enLabel: 'Raw Disclosures',
-    desc: '8季度财报与SEC/巨潮穿透',
+    desc: '8Q财报与SEC/巨潮穿透',
     icon: FileSearch
   },
   {
     id: 'reconstruction' as StageId,
     num: '02',
     label: '财务重构',
-    enLabel: 'Financial Reconstruction',
-    desc: 'NOPAT/ROIC与经济利润',
+    enLabel: 'Reconstruction',
+    desc: '研发资本化与经济利润',
     icon: Calculator
   },
   {
@@ -30,15 +30,15 @@ export const STAGES = [
     num: '03',
     label: '经营驱动',
     enLabel: 'Operating Drivers',
-    desc: '单车量价/毛利与横向对标',
+    desc: '量价利拆解与同业对标',
     icon: Gauge
   },
   {
     id: 'scenarios' as StageId,
     num: '04',
     label: '情景预测',
-    enLabel: 'Scenario Forecasting',
-    desc: '交互滑块与10年自由现金流',
+    enLabel: 'Scenarios',
+    desc: '概率加权与10年FCFF',
     icon: Sliders
   },
   {
@@ -46,7 +46,7 @@ export const STAGES = [
     num: '05',
     label: '估值区间',
     enLabel: 'Valuation Range',
-    desc: '内在价值与存量/增长拆解',
+    desc: '蒙特卡洛与PVGO拆解',
     icon: DollarSign
   },
   {
@@ -54,7 +54,7 @@ export const STAGES = [
     num: '06',
     label: '市场隐含预期',
     enLabel: 'Market Expectations',
-    desc: '逆向DCF求解与认错条件',
+    desc: '逆向DCF求解与认错线',
     icon: Target,
     highlight: true
   }
@@ -65,9 +65,9 @@ export const StageNavigator: React.FC<StageNavigatorProps> = ({
   onSelectStage
 }) => {
   return (
-    <div className="bg-slate-900/90 border-y border-slate-800 backdrop-blur-md sticky top-0 z-30 shadow-md">
+    <div className="bg-slate-900/80 border-b border-slate-800 backdrop-blur-md sticky top-0 z-30 shadow-md">
       <div className="max-w-7xl mx-auto px-4">
-        <div className="flex items-center overflow-x-auto py-2.5 gap-2 scrollbar-none">
+        <div className="flex items-center overflow-x-auto py-2 gap-2 scrollbar-none">
           {STAGES.map((stage, idx) => {
             const Icon = stage.icon;
             const isActive = currentStage === stage.id;
@@ -75,20 +75,20 @@ export const StageNavigator: React.FC<StageNavigatorProps> = ({
               <React.Fragment key={stage.id}>
                 <button
                   onClick={() => onSelectStage(stage.id)}
-                  className={`flex items-center gap-2.5 px-3.5 py-2 rounded-xl text-left transition-all flex-shrink-0 group ${
+                  className={`flex items-center gap-2.5 px-3 py-1.5 rounded-xl text-left transition-all flex-shrink-0 group ${
                     isActive
                       ? stage.highlight
-                        ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-lg shadow-cyan-900/30'
-                        : 'bg-slate-800 text-cyan-400 border border-slate-700 shadow-md'
-                      : 'hover:bg-slate-850 text-slate-400 hover:text-slate-200'
+                        ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-lg shadow-cyan-900/30 border border-cyan-400/40'
+                        : 'bg-slate-800 text-cyan-300 border border-slate-700 shadow-md'
+                      : 'hover:bg-slate-850 text-slate-400 hover:text-slate-200 border border-transparent'
                   }`}
                 >
                   <div className={`p-1.5 rounded-lg transition-colors ${
                     isActive 
                       ? 'bg-white/20 text-white' 
-                      : 'bg-slate-800 text-slate-400 group-hover:text-cyan-400'
+                      : 'bg-slate-950 text-slate-400 group-hover:text-cyan-400 border border-slate-800'
                   }`}>
-                    <Icon className="w-4 h-4" />
+                    <Icon className="w-3.5 h-3.5" />
                   </div>
                   <div>
                     <div className="flex items-center gap-1.5">

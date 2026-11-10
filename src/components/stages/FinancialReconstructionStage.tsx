@@ -1,8 +1,8 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Company, QuarterData, ReconstructedFinancials, AccountingOptions } from '../../types/financial';
 import { reconstructFinancials } from '../../utils/financialEngine';
 import { formatNumber, formatCurrency, formatPercent } from '../../utils/formatters';
-import { Calculator, ArrowRight, Zap, TrendingUp, AlertTriangle, ToggleLeft, ToggleRight, Settings2 } from 'lucide-react';
+import { Calculator, ArrowRight, Zap, TrendingUp, AlertTriangle, Settings2, Sparkles, Layers, CheckCircle2 } from 'lucide-react';
 
 interface FinancialReconstructionStageProps {
   company: Company;
@@ -24,25 +24,48 @@ export const FinancialReconstructionStage: React.FC<FinancialReconstructionStage
   });
 
   const latestRecon = reconstructedList[reconstructedList.length - 1];
+  const latestQ = quarters[quarters.length - 1];
+
+  // Waterfall Chart Bridge Data for latest quarter
+  const rawEbit = latestQ.operatingProfit.value;
+  const rdAddition = accountingOptions.capitalizeRD ? latestQ.rdExpense.value : 0;
+  const rdAmortizationDeduction = accountingOptions.capitalizeRD ? Math.round(latestRecon.capitalizedRdAsset / (accountingOptions.rdAmortizationYears * 4)) : 0;
+  const subsidyDeduction = accountingOptions.excludeCreditsAndSubsidies && latestQ.regulatoryCreditsOrSubsidies ? latestQ.regulatoryCreditsOrSubsidies.value : 0;
+  const adjustedEbit = rawEbit + rdAddition - rdAmortizationDeduction - subsidyDeduction;
+  const taxDeduction = adjustedEbit > 0 ? Math.round(adjustedEbit * company.effectiveTaxRate) : 0;
+  const finalEconomicNopat = latestRecon.nopat;
+
+  const waterfallSteps = [
+    { label: 'GAAP 营业利润 (EBIT)', amount: rawEbit, type: 'base', runningTotal: rawEbit },
+    ...(accountingOptions.capitalizeRD ? [
+      { label: '+ 当期研发费用全额加回', amount: rdAddition, type: 'positive', runningTotal: rawEbit + rdAddition },
+      { label: '- 历史研发资产季度摊销', amount: -rdAmortizationDeduction, type: 'negative', runningTotal: rawEbit + rdAddition - rdAmortizationDeduction }
+    ] : []),
+    ...(accountingOptions.excludeCreditsAndSubsidies && subsidyDeduction > 0 ? [
+      { label: '- 剔除非经常补贴/碳积分', amount: -subsidyDeduction, type: 'negative', runningTotal: rawEbit - subsidyDeduction }
+    ] : []),
+    { label: '- 经营现金有效税扣除', amount: -taxDeduction, type: 'negative', runningTotal: adjustedEbit - taxDeduction },
+    { label: '重构经济 NOPAT (真实造血)', amount: finalEconomicNopat, type: 'total', runningTotal: finalEconomicNopat }
+  ];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 animate-fadeIn">
       {/* Top Banner */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+      <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-mono uppercase tracking-wider text-cyan-400 font-semibold">
-              阶段 02 ｜ 财务重构与真实经济利润 (v3.0)
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-mono uppercase tracking-wider text-cyan-400 font-semibold px-2 py-0.5 rounded bg-cyan-950 border border-cyan-800/60">
+              阶段 02 ｜ 财务重构与真实经济利润 (v3.1)
             </span>
             <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-blue-950/60 text-blue-400 border border-blue-800/40">
-              会计调整与研发资本化引擎
+              会计准则还原 ➔ 经济实质
             </span>
           </div>
-          <h2 className="text-xl font-bold text-slate-100 mt-1">
+          <h2 className="text-xl font-bold text-slate-100 mt-1.5">
             {company.chineseName} 资本回报率 (ROIC) 与经济附加值 (EVA) 穿透
           </h2>
-          <p className="text-xs text-slate-400 mt-1 max-w-3xl">
-            会计准则（GAAP/IFRS）往往将研发一次性费用化并包含碳积分/补贴扰动。本模块提供研发资产化与非经常性损益剥离开关，还原最真实的经济投资资本与持续造血率。
+          <p className="text-xs text-slate-400 mt-1 max-w-3xl leading-relaxed">
+            标准会计准则（GAAP/IFRS）通常将高科技研发支出一次性费用化并包含政府补贴等非经常性损益。本模块提供研发资产化与非经常性损益剥离开关，还原最真实的经济投资资本（IC）与持续造血能力。
           </p>
         </div>
 
@@ -54,9 +77,9 @@ export const FinancialReconstructionStage: React.FC<FinancialReconstructionStage
                 ...accountingOptions,
                 capitalizeRD: !accountingOptions.capitalizeRD
               })}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
                 accountingOptions.capitalizeRD
-                  ? 'bg-cyan-600 text-white'
+                  ? 'bg-cyan-600 text-white shadow-[0_0_12px_rgba(34,211,238,0.3)]'
                   : 'bg-slate-800 text-slate-400 hover:text-slate-200'
               }`}
             >
@@ -64,14 +87,29 @@ export const FinancialReconstructionStage: React.FC<FinancialReconstructionStage
               <span>研发资本化 ({accountingOptions.capitalizeRD ? '已开启' : '已关闭'})</span>
             </button>
 
+            {accountingOptions.capitalizeRD && (
+              <select
+                value={accountingOptions.rdAmortizationYears}
+                onChange={(e) => onChangeAccountingOptions({
+                  ...accountingOptions,
+                  rdAmortizationYears: parseInt(e.target.value, 10)
+                })}
+                className="bg-slate-900 border border-slate-700 text-cyan-300 text-xs rounded-lg px-2 py-1 font-mono focus:outline-none"
+              >
+                <option value={3}>3年直线摊销</option>
+                <option value={5}>5年直线摊销</option>
+                <option value={7}>7年直线摊销</option>
+              </select>
+            )}
+
             <button
               onClick={() => onChangeAccountingOptions({
                 ...accountingOptions,
                 excludeCreditsAndSubsidies: !accountingOptions.excludeCreditsAndSubsidies
               })}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
                 accountingOptions.excludeCreditsAndSubsidies
-                  ? 'bg-amber-600 text-white'
+                  ? 'bg-amber-600 text-white shadow-[0_0_12px_rgba(251,191,36,0.3)]'
                   : 'bg-slate-800 text-slate-400 hover:text-slate-200'
               }`}
             >
@@ -81,19 +119,19 @@ export const FinancialReconstructionStage: React.FC<FinancialReconstructionStage
         </div>
       </div>
 
-      {/* DuPont / ROIC Tree Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      {/* 4 Scorecards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Card 1: ROIC */}
-        <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 shadow-md">
+        <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 shadow-lg">
           <div className="flex items-center justify-between text-xs text-slate-400">
             <span>年化重构回报率 (ROIC)</span>
-            <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
-              latestRecon.roic > company.wacc ? 'bg-emerald-950 text-emerald-400' : 'bg-rose-950 text-rose-400'
+            <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-bold ${
+              latestRecon.roic > company.wacc ? 'bg-emerald-950 text-emerald-400 border border-emerald-800/40' : 'bg-rose-950 text-rose-400 border border-rose-800/40'
             }`}>
               {latestRecon.roic > company.wacc ? '超额创造价值' : '低于资本成本'}
             </span>
           </div>
-          <div className="text-2xl font-bold font-mono text-cyan-300 mt-2">
+          <div className="text-2xl font-black font-mono text-cyan-300 mt-2">
             {formatPercent(latestRecon.roic)}
           </div>
           <div className="text-[11px] text-slate-500 mt-1">
@@ -102,9 +140,9 @@ export const FinancialReconstructionStage: React.FC<FinancialReconstructionStage
         </div>
 
         {/* Card 2: NOPAT Margin */}
-        <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 shadow-md">
+        <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 shadow-lg">
           <div className="text-xs text-slate-400">重构 NOPAT 利润率</div>
-          <div className="text-2xl font-bold font-mono text-slate-100 mt-2">
+          <div className="text-2xl font-black font-mono text-slate-100 mt-2">
             {formatPercent(latestRecon.nopatMargin)}
           </div>
           <div className="text-[11px] text-slate-500 mt-1">
@@ -113,9 +151,9 @@ export const FinancialReconstructionStage: React.FC<FinancialReconstructionStage
         </div>
 
         {/* Card 3: Capital Turnover */}
-        <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 shadow-md">
+        <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 shadow-lg">
           <div className="text-xs text-slate-400">投入资本周转率 (Turnover)</div>
-          <div className="text-2xl font-bold font-mono text-slate-100 mt-2">
+          <div className="text-2xl font-black font-mono text-slate-100 mt-2">
             {latestRecon.capitalTurnover}x
           </div>
           <div className="text-[11px] text-slate-500 mt-1">
@@ -124,59 +162,151 @@ export const FinancialReconstructionStage: React.FC<FinancialReconstructionStage
         </div>
 
         {/* Card 4: Cash Conversion Cycle */}
-        <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 shadow-md">
+        <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 shadow-lg">
           <div className="text-xs text-slate-400">现金循环周期 (CCC)</div>
-          <div className="text-2xl font-bold font-mono text-amber-300 mt-2">
+          <div className="text-2xl font-black font-mono text-amber-300 mt-2">
             {latestRecon.cashConversionCycle} 天
           </div>
           <div className="text-[11px] text-slate-500 mt-1">
-            {latestRecon.cashConversionCycle < 0 ? '极强议价占款 (负营运资金)' : '营运资金正常占用'}
+            {latestRecon.cashConversionCycle < 0 ? '极强上游占款能力 (负营运资金)' : '产业链营运资金正常占用'}
           </div>
         </div>
       </div>
 
-      {/* ROIC Formula Breakdown Banner */}
-      <div className="p-4 rounded-xl bg-slate-950 border border-cyan-900/30 flex flex-col md:flex-row items-center justify-around gap-4 text-center">
-        <div>
-          <span className="text-[11px] text-slate-500 uppercase tracking-wider font-mono">重构 ROIC</span>
-          <div className="text-lg font-bold text-cyan-400 font-mono mt-0.5">
-            {formatPercent(latestRecon.roic)}
+      {/* Visual 1: GAAP EBIT to Economic NOPAT Waterfall Chart */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl">
+        <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+          <div className="flex items-center gap-2">
+            <Layers className="w-5 h-5 text-cyan-400" />
+            <h3 className="text-sm font-bold text-slate-100">
+              会计 EBIT ➔ 经济 NOPAT 重构瀑布阶梯 ({latestQ.periodLabel})
+            </h3>
           </div>
+          <span className="text-[11px] font-mono text-slate-400">
+            金额单位：{company.currencySymbol}M
+          </span>
         </div>
-        <div className="text-slate-600 font-bold text-lg">=</div>
-        <div>
-          <span className="text-[11px] text-slate-500 uppercase tracking-wider font-mono">NOPAT 利润率</span>
-          <div className="text-lg font-bold text-slate-200 font-mono mt-0.5">
-            {formatPercent(latestRecon.nopatMargin)}
+
+        <div className="mt-4 grid grid-cols-1 md:grid-cols-5 gap-3 items-end">
+          {waterfallSteps.map((step, idx) => {
+            const isTotal = step.type === 'total';
+            const isPositive = step.amount >= 0 && !isTotal;
+            const isNegative = step.amount < 0;
+
+            return (
+              <div key={idx} className="p-3.5 rounded-xl bg-slate-950 border border-slate-850 flex flex-col justify-between h-32 relative overflow-hidden group">
+                <span className="text-[11px] text-slate-400 font-medium leading-snug line-clamp-2">
+                  {step.label}
+                </span>
+
+                <div className="mt-2">
+                  <div className={`text-lg font-black font-mono ${
+                    isTotal 
+                      ? 'text-cyan-300' 
+                      : isPositive 
+                        ? 'text-emerald-400' 
+                        : isNegative 
+                          ? 'text-rose-400' 
+                          : 'text-slate-200'
+                  }`}>
+                    {step.amount > 0 && !isTotal ? '+' : ''}{formatNumber(step.amount)}
+                  </div>
+                  <div className="text-[10px] text-slate-500 font-mono mt-0.5">
+                    阶梯结转: {formatNumber(step.runningTotal)}
+                  </div>
+                </div>
+
+                {/* Color bar indicator at bottom */}
+                <div className={`absolute bottom-0 left-0 right-0 h-1.5 ${
+                  isTotal ? 'bg-cyan-500' : isPositive ? 'bg-emerald-500' : 'bg-rose-500'
+                }`} />
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Visual 2: Visual DuPont Tree Diagram */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl">
+        <div className="flex items-center gap-2 pb-3 border-b border-slate-800">
+          <Calculator className="w-5 h-5 text-purple-400" />
+          <h3 className="text-sm font-bold text-slate-100">
+            杜邦 ROIC 经济驱动树状拆解模型 (DuPont ROIC Tree)
+          </h3>
+        </div>
+
+        <div className="mt-5 flex flex-col md:flex-row items-center justify-around gap-4 text-center">
+          {/* Node 1: Final ROIC */}
+          <div className="p-4 rounded-xl bg-slate-950 border border-cyan-800/50 shadow-md w-full md:w-56">
+            <span className="text-[11px] text-slate-400 uppercase tracking-wider font-mono font-bold block">
+              重构回报率 (ROIC)
+            </span>
+            <div className="text-2xl font-black text-cyan-300 font-mono mt-1">
+              {formatPercent(latestRecon.roic)}
+            </div>
+            <div className="text-[10px] text-slate-500 mt-1 font-mono">
+              GAAP 原生: {formatPercent(latestRecon.rawRoic)}
+            </div>
           </div>
-        </div>
-        <div className="text-slate-600 font-bold text-lg">×</div>
-        <div>
-          <span className="text-[11px] text-slate-500 uppercase tracking-wider font-mono">资本周转率</span>
-          <div className="text-lg font-bold text-slate-200 font-mono mt-0.5">
-            {latestRecon.capitalTurnover}x
+
+          <div className="text-slate-600 font-black text-xl">=</div>
+
+          {/* Node 2: NOPAT Margin */}
+          <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 shadow-md w-full md:w-56">
+            <span className="text-[11px] text-slate-400 uppercase tracking-wider font-mono font-bold block">
+              NOPAT 利润率
+            </span>
+            <div className="text-2xl font-black text-slate-100 font-mono mt-1">
+              {formatPercent(latestRecon.nopatMargin)}
+            </div>
+            <div className="text-[10px] text-slate-500 mt-1 font-mono">
+              NOPAT: {formatNumber(latestRecon.nopat)} / Rev: {formatNumber(latestQ.totalRevenue.value)}
+            </div>
           </div>
-        </div>
-        <div className="text-slate-600 font-bold text-lg">➔</div>
-        <div>
-          <span className="text-[11px] text-slate-500 uppercase tracking-wider font-mono">经济利差 (ROIC - WACC)</span>
-          <div className={`text-lg font-bold font-mono mt-0.5 ${
-            latestRecon.roic - company.wacc > 0 ? 'text-emerald-400' : 'text-rose-400'
-          }`}>
-            {formatPercent(latestRecon.roic - company.wacc)}
+
+          <div className="text-slate-600 font-black text-xl">×</div>
+
+          {/* Node 3: Capital Turnover */}
+          <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 shadow-md w-full md:w-56">
+            <span className="text-[11px] text-slate-400 uppercase tracking-wider font-mono font-bold block">
+              资本周转率 (Turnover)
+            </span>
+            <div className="text-2xl font-black text-slate-100 font-mono mt-1">
+              {latestRecon.capitalTurnover}x
+            </div>
+            <div className="text-[10px] text-slate-500 mt-1 font-mono">
+              Rev / 投入资本 IC ({formatNumber(latestRecon.investedCapital)})
+            </div>
+          </div>
+
+          <div className="text-slate-600 font-black text-xl">➔</div>
+
+          {/* Node 4: Economic Spread */}
+          <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 shadow-md w-full md:w-56">
+            <span className="text-[11px] text-slate-400 uppercase tracking-wider font-mono font-bold block">
+              经济利润利差 (Spread)
+            </span>
+            <div className={`text-2xl font-black font-mono mt-1 ${
+              latestRecon.roic - company.wacc > 0 ? 'text-emerald-400' : 'text-rose-400'
+            }`}>
+              {formatPercent(latestRecon.roic - company.wacc)}
+            </div>
+            <div className="text-[10px] text-slate-500 mt-1 font-mono">
+              基准 WACC: {formatPercent(company.wacc)}
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Reconstructed Multi-Quarter Table */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+      {/* Visual 3: 8-Quarter ROIC vs WACC Trend Table */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl">
         <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-850/50">
           <div className="flex items-center gap-2 text-xs text-slate-300 font-medium">
-            <Calculator className="w-4 h-4 text-cyan-400" />
-            <span>连续8季度重构经济指标趋势表 ({accountingOptions.capitalizeRD ? '含研发资本化' : '未开启资本化'})</span>
+            <TrendingUp className="w-4 h-4 text-cyan-400" />
+            <span>连续 8 季度重构经济指标趋势表 ({accountingOptions.capitalizeRD ? `${accountingOptions.rdAmortizationYears}年研发资本化` : '未开启研发资本化'})</span>
           </div>
           <span className="text-[11px] text-slate-400 font-mono">
-            所得税率基准: {formatPercent(company.effectiveTaxRate)}
+            所得税率基准: {formatPercent(company.effectiveTaxRate)} ｜ 资本成本 (WACC): {formatPercent(company.wacc)}
           </span>
         </div>
 

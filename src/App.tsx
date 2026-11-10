@@ -3,9 +3,12 @@ import { Company, ForecastInputs, DisclosureSource, IndustryId, AccountingOption
 import { COMPANIES } from './data/companies';
 import { HISTORICAL_DATA } from './data/historicalData';
 import { ALL_RESEARCH_MEMOS } from './data/researchMemos';
-import { calculateForwardDCF } from './utils/dcfSolver';
+import { calculateForwardDCF, solveImpliedGrowthRate, solveImpliedGrossMargin, solveImpliedCapYears } from './utils/dcfSolver';
 import { Navbar } from './components/Navbar';
 import { StageNavigator, StageId } from './components/StageNavigator';
+import { LiveValuationHud } from './components/LiveValuationHud';
+import { QuickSandboxDrawer } from './components/QuickSandboxDrawer';
+import { CommandPaletteModal } from './components/CommandPaletteModal';
 import { DisclosureDrawer } from './components/DisclosureDrawer';
 import { RawDisclosuresStage } from './components/stages/RawDisclosuresStage';
 import { FinancialReconstructionStage } from './components/stages/FinancialReconstructionStage';
@@ -20,8 +23,10 @@ export const App: React.FC = () => {
   const [activeCompany, setActiveCompany] = useState<Company>(COMPANIES[0]);
   const [currentStage, setCurrentStage] = useState<StageId>('disclosures');
   const [isMemoOpen, setIsMemoOpen] = useState(false);
+  const [isSandboxOpen, setIsSandboxOpen] = useState(false);
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
 
-  // Accounting Options (v3.0)
+  // Accounting Options (v3.1)
   const [accountingOptions, setAccountingOptions] = useState<AccountingOptions>({
     capitalizeRD: false,
     rdAmortizationYears: 3,
@@ -41,6 +46,18 @@ export const App: React.FC = () => {
     value: '',
     disclosure: null
   });
+
+  // Global Keyboard shortcuts: Ctrl+K / Cmd+K for Command Palette
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setIsCommandPaletteOpen(prev => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   // URL query params synchronization for Eugene Finance Research Hub protocol
   useEffect(() => {
@@ -269,6 +286,40 @@ export const App: React.FC = () => {
     );
   }, [baseQuarter, inputs, activeCompany]);
 
+  // Global Solvers for Live Valuation HUD
+  const impliedGrowth = useMemo(() => {
+    return solveImpliedGrowthRate(
+      activeCompany.marketCap,
+      baseQuarter.deliveries.value,
+      baseQuarter.asp.value,
+      baseQuarter.totalRevenue.value,
+      inputs,
+      activeCompany.netDebt,
+      activeCompany.sharesOutstanding,
+      activeCompany.currentStockPrice
+    );
+  }, [activeCompany, baseQuarter, inputs]);
+
+  const impliedMargin = useMemo(() => {
+    const fixedGrowthInputs = { ...inputs, volumeGrowthYears1to5: 0.15, volumeGrowthYears6to10: 0.06 };
+    return solveImpliedGrossMargin(
+      activeCompany.marketCap,
+      baseQuarter.deliveries.value,
+      baseQuarter.asp.value,
+      baseQuarter.totalRevenue.value,
+      fixedGrowthInputs,
+      activeCompany.netDebt,
+      activeCompany.sharesOutstanding,
+      activeCompany.currentStockPrice
+    );
+  }, [activeCompany, baseQuarter, inputs]);
+
+  const micap = useMemo(() => {
+    const baseNopat = valuation.forecastYears[0].nopat;
+    const baseIc = Math.max(activeCompany.marketCap * 0.2, 5000);
+    return solveImpliedCapYears(activeCompany.enterpriseValue, baseNopat, baseIc, inputs.wacc);
+  }, [activeCompany.enterpriseValue, valuation.forecastYears, inputs.wacc, activeCompany.marketCap]);
+
   const handleInspect = (name: string, period: string, value: string, disclosure: DisclosureSource) => {
     setInspectedMetric({ name, period, value, disclosure });
     setDrawerOpen(true);
@@ -279,7 +330,7 @@ export const App: React.FC = () => {
   }, [activeCompany.id]);
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-cyan-500 selection:text-white">
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-cyan-500/30 selection:text-cyan-200 bg-grid-pattern">
       {/* 1. Navbar */}
       <Navbar
         activeIndustry={activeIndustry}
@@ -287,6 +338,7 @@ export const App: React.FC = () => {
         activeCompany={activeCompany}
         onSelectCompany={handleSelectCompany}
         onOpenMemos={() => setIsMemoOpen(true)}
+        onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
       />
 
       {/* 2. Interactive Stage Pipeline Navigation */}
@@ -295,8 +347,21 @@ export const App: React.FC = () => {
         onSelectStage={setCurrentStage}
       />
 
-      {/* 3. Main Stage Content */}
-      <main className="max-w-7xl mx-auto px-4 py-8 flex-1 w-full">
+      {/* 3. Global Live Valuation & Expectation Telemetry HUD */}
+      <LiveValuationHud
+        company={activeCompany}
+        valuation={valuation}
+        inputs={inputs}
+        accountingOptions={accountingOptions}
+        impliedGrowth={impliedGrowth}
+        impliedMargin={impliedMargin}
+        impliedCapYears={micap.capYears}
+        onOpenSandbox={() => setIsSandboxOpen(true)}
+        isSandboxOpen={isSandboxOpen}
+      />
+
+      {/* 4. Main Stage Content */}
+      <main className="max-w-7xl mx-auto px-4 py-6 flex-1 w-full">
         {currentStage === 'disclosures' && (
           <RawDisclosuresStage
             company={activeCompany}
@@ -353,11 +418,38 @@ export const App: React.FC = () => {
             baseRevenue={baseQuarter.totalRevenue.value}
             memo={activeMemo}
             onOpenMemo={() => setIsMemoOpen(true)}
+            onChangeInputs={setInputs}
           />
         )}
       </main>
 
-      {/* 4. Slide-Over Audit Drawer */}
+      {/* 5. Quick Sandbox Drawer (Floating from Right) */}
+      <QuickSandboxDrawer
+        isOpen={isSandboxOpen}
+        onClose={() => setIsSandboxOpen(false)}
+        company={activeCompany}
+        inputs={inputs}
+        valuation={valuation}
+        onChangeInputs={setInputs}
+        onApplyPreset={handleApplyPreset}
+      />
+
+      {/* 6. Command Palette Modal (Ctrl+K) */}
+      <CommandPaletteModal
+        isOpen={isCommandPaletteOpen}
+        onClose={() => setIsCommandPaletteOpen(false)}
+        onSelectCompany={handleSelectCompany}
+        onSelectStage={setCurrentStage}
+        onOpenMemos={(companyId) => {
+          if (companyId) {
+            const comp = COMPANIES.find(c => c.id === companyId);
+            if (comp) handleSelectCompany(comp);
+          }
+          setIsMemoOpen(true);
+        }}
+      />
+
+      {/* 7. Slide-Over Audit Drawer */}
       <DisclosureDrawer
         isOpen={drawerOpen}
         onClose={() => setDrawerOpen(false)}
@@ -367,7 +459,7 @@ export const App: React.FC = () => {
         disclosure={inspectedMetric.disclosure}
       />
 
-      {/* 5. Institutional Research Memo & Forecast Ledger Modal */}
+      {/* 8. Institutional Research Memo & Forecast Ledger Modal */}
       <ResearchMemoModal
         isOpen={isMemoOpen}
         onClose={() => setIsMemoOpen(false)}
@@ -378,13 +470,13 @@ export const App: React.FC = () => {
         }}
       />
 
-      {/* 6. Footer */}
+      {/* 9. Footer */}
       <footer className="border-t border-slate-900 bg-slate-950 py-6 text-slate-500 text-xs">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-2">
             <span className="font-bold text-slate-400">Eugene Finance</span>
             <span>·</span>
-            <span>公司经营、估值与市场隐含预期实验室 (v3.0 全功能升级版)</span>
+            <span>公司经营、估值与市场隐含预期实验室 (v3.1 深度交互与美学版)</span>
           </div>
           <div className="flex items-center gap-4 text-[11px] font-mono">
             <span>SEC EDGAR XBRL</span>
