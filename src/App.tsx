@@ -4,6 +4,7 @@ import { COMPANIES } from './data/companies';
 import { HISTORICAL_DATA } from './data/historicalData';
 import { ALL_RESEARCH_MEMOS } from './data/researchMemos';
 import { calculateForwardDCF, solveImpliedGrowthRate, solveImpliedGrossMargin, solveImpliedCapYears } from './utils/dcfSolver';
+import { fetchLiveQuotes, LiveQuoteItem, LATEST_MARKET_SNAPSHOT, FILING_BENCHMARK_PRICES } from './utils/liveQuoteService';
 import { Navbar } from './components/Navbar';
 import { StageNavigator, StageId } from './components/StageNavigator';
 import { LiveValuationHud } from './components/LiveValuationHud';
@@ -26,7 +27,44 @@ export const App: React.FC = () => {
   const [isSandboxOpen, setIsSandboxOpen] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
 
-  // Accounting Options (v3.1)
+  // Price Time-Machine Mode: 'live' (Latest real-time), 'filing' (10-K benchmark), 'custom' (Arbitrary)
+  const [priceMode, setPriceMode] = useState<'live' | 'filing' | 'custom'>('live');
+  const [customPrice, setCustomPrice] = useState<number | null>(null);
+
+  // Live Quotes State
+  const [liveQuotes, setLiveQuotes] = useState<Record<string, LiveQuoteItem>>({});
+  const [quoteTimestamp, setQuoteTimestamp] = useState<string>('盘中实时');
+  const [isLiveConnected, setIsLiveConnected] = useState<boolean>(true);
+
+  // Fetch Live Quotes on mount and periodically
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadQuotes = async () => {
+      try {
+        const quotes = await fetchLiveQuotes();
+        if (isMounted) {
+          setLiveQuotes(quotes);
+          const firstItem = Object.values(quotes)[0];
+          if (firstItem) {
+            setQuoteTimestamp(firstItem.timestamp);
+            setIsLiveConnected(firstItem.source === 'live');
+          }
+        }
+      } catch {
+        if (isMounted) setIsLiveConnected(false);
+      }
+    };
+
+    loadQuotes();
+    const interval = setInterval(loadQuotes, 30000); // 30s auto-refresh
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, []);
+
+  // Accounting Options (v3.2)
   const [accountingOptions, setAccountingOptions] = useState<AccountingOptions>({
     capitalizeRD: false,
     rdAmortizationYears: 3,
@@ -81,12 +119,36 @@ export const App: React.FC = () => {
     }
   }, []);
 
+  // Effective Current Stock Price according to Price Mode
+  const effectiveStockPrice = useMemo(() => {
+    if (priceMode === 'filing') {
+      return activeCompany.filingBenchmarkPrice || FILING_BENCHMARK_PRICES[activeCompany.id] || 138.50;
+    }
+    if (priceMode === 'custom' && customPrice !== null && customPrice > 0) {
+      return customPrice;
+    }
+    // Live mode: check live quote first, fallback to company.currentStockPrice
+    return liveQuotes[activeCompany.id]?.price || activeCompany.currentStockPrice;
+  }, [priceMode, customPrice, activeCompany, liveQuotes]);
+
+  // Dynamically computed effective company with real-time market cap & EV
+  const effectiveCompany = useMemo<Company>(() => {
+    const marketCap = Math.round(effectiveStockPrice * activeCompany.sharesOutstanding);
+    const enterpriseValue = marketCap + activeCompany.netDebt;
+    return {
+      ...activeCompany,
+      currentStockPrice: effectiveStockPrice,
+      marketCap,
+      enterpriseValue
+    };
+  }, [activeCompany, effectiveStockPrice]);
+
   // Historical quarters for active company
   const quarters = useMemo(() => {
     return HISTORICAL_DATA[activeCompany.id] || HISTORICAL_DATA['tsla'];
   }, [activeCompany.id]);
 
-  // Annual baseline for forward DCF
+  // Baseline quarter for forward DCF
   const baseQuarter = useMemo(() => {
     const fy24 = quarters.find((q) => q.period === '2024-FY');
     return fy24 || quarters[quarters.length - 1];
@@ -244,6 +306,8 @@ export const App: React.FC = () => {
   const handleSelectCompany = (comp: Company) => {
     setActiveCompany(comp);
     setActiveIndustry(comp.industryId);
+    setPriceMode('live');
+    setCustomPrice(null);
     setInputs(defaultInputs[comp.id] || defaultInputs['tsla']);
   };
 
@@ -273,56 +337,63 @@ export const App: React.FC = () => {
     }
   };
 
-  // Run dynamic DCF Valuation
+  // Run dynamic DCF Valuation using effectiveCompany (incorporates real-time price & market cap)
   const valuation = useMemo(() => {
     return calculateForwardDCF(
       baseQuarter.deliveries.value,
       baseQuarter.asp.value,
       baseQuarter.totalRevenue.value,
       inputs,
-      activeCompany.netDebt,
-      activeCompany.sharesOutstanding,
-      activeCompany.currentStockPrice
+      effectiveCompany.netDebt,
+      effectiveCompany.sharesOutstanding,
+      effectiveCompany.currentStockPrice
     );
-  }, [baseQuarter, inputs, activeCompany]);
+  }, [baseQuarter, inputs, effectiveCompany]);
 
-  // Global Solvers for Live Valuation HUD
+  // Global Solvers for Live Valuation HUD based on effectiveCompany
   const impliedGrowth = useMemo(() => {
     return solveImpliedGrowthRate(
-      activeCompany.marketCap,
+      effectiveCompany.marketCap,
       baseQuarter.deliveries.value,
       baseQuarter.asp.value,
       baseQuarter.totalRevenue.value,
       inputs,
-      activeCompany.netDebt,
-      activeCompany.sharesOutstanding,
-      activeCompany.currentStockPrice
+      effectiveCompany.netDebt,
+      effectiveCompany.sharesOutstanding,
+      effectiveCompany.currentStockPrice
     );
-  }, [activeCompany, baseQuarter, inputs]);
+  }, [effectiveCompany, baseQuarter, inputs]);
 
   const impliedMargin = useMemo(() => {
     const fixedGrowthInputs = { ...inputs, volumeGrowthYears1to5: 0.15, volumeGrowthYears6to10: 0.06 };
     return solveImpliedGrossMargin(
-      activeCompany.marketCap,
+      effectiveCompany.marketCap,
       baseQuarter.deliveries.value,
       baseQuarter.asp.value,
       baseQuarter.totalRevenue.value,
       fixedGrowthInputs,
-      activeCompany.netDebt,
-      activeCompany.sharesOutstanding,
-      activeCompany.currentStockPrice
+      effectiveCompany.netDebt,
+      effectiveCompany.sharesOutstanding,
+      effectiveCompany.currentStockPrice
     );
-  }, [activeCompany, baseQuarter, inputs]);
+  }, [effectiveCompany, baseQuarter, inputs]);
 
   const micap = useMemo(() => {
     const baseNopat = valuation.forecastYears[0].nopat;
-    const baseIc = Math.max(activeCompany.marketCap * 0.2, 5000);
-    return solveImpliedCapYears(activeCompany.enterpriseValue, baseNopat, baseIc, inputs.wacc);
-  }, [activeCompany.enterpriseValue, valuation.forecastYears, inputs.wacc, activeCompany.marketCap]);
+    const baseIc = Math.max(effectiveCompany.marketCap * 0.2, 5000);
+    return solveImpliedCapYears(effectiveCompany.enterpriseValue, baseNopat, baseIc, inputs.wacc);
+  }, [effectiveCompany.enterpriseValue, valuation.forecastYears, inputs.wacc, effectiveCompany.marketCap]);
 
   const handleInspect = (name: string, period: string, value: string, disclosure: DisclosureSource) => {
     setInspectedMetric({ name, period, value, disclosure });
     setDrawerOpen(true);
+  };
+
+  const handleSelectPriceMode = (mode: 'live' | 'filing' | 'custom', customVal?: number) => {
+    setPriceMode(mode);
+    if (mode === 'custom' && customVal !== undefined) {
+      setCustomPrice(customVal);
+    }
   };
 
   const activeMemo = useMemo(() => {
@@ -335,10 +406,11 @@ export const App: React.FC = () => {
       <Navbar
         activeIndustry={activeIndustry}
         onSelectIndustry={setActiveIndustry}
-        activeCompany={activeCompany}
+        activeCompany={effectiveCompany}
         onSelectCompany={handleSelectCompany}
         onOpenMemos={() => setIsMemoOpen(true)}
         onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
+        liveQuotes={liveQuotes}
       />
 
       {/* 2. Interactive Stage Pipeline Navigation */}
@@ -347,9 +419,9 @@ export const App: React.FC = () => {
         onSelectStage={setCurrentStage}
       />
 
-      {/* 3. Global Live Valuation & Expectation Telemetry HUD */}
+      {/* 3. Global Live Valuation & Expectation Telemetry HUD with Price Time-Machine */}
       <LiveValuationHud
-        company={activeCompany}
+        company={effectiveCompany}
         valuation={valuation}
         inputs={inputs}
         accountingOptions={accountingOptions}
@@ -358,13 +430,17 @@ export const App: React.FC = () => {
         impliedCapYears={micap.capYears}
         onOpenSandbox={() => setIsSandboxOpen(true)}
         isSandboxOpen={isSandboxOpen}
+        activePriceMode={priceMode}
+        onSelectPriceMode={handleSelectPriceMode}
+        liveQuoteTimestamp={quoteTimestamp}
+        isLiveConnected={isLiveConnected}
       />
 
       {/* 4. Main Stage Content */}
       <main className="max-w-7xl mx-auto px-4 py-6 flex-1 w-full">
         {currentStage === 'disclosures' && (
           <RawDisclosuresStage
-            company={activeCompany}
+            company={effectiveCompany}
             quarters={quarters}
             onInspect={handleInspect}
           />
@@ -372,7 +448,7 @@ export const App: React.FC = () => {
 
         {currentStage === 'reconstruction' && (
           <FinancialReconstructionStage
-            company={activeCompany}
+            company={effectiveCompany}
             quarters={quarters}
             accountingOptions={accountingOptions}
             onChangeAccountingOptions={setAccountingOptions}
@@ -381,7 +457,7 @@ export const App: React.FC = () => {
 
         {currentStage === 'drivers' && (
           <OperatingDriversStage
-            company={activeCompany}
+            company={effectiveCompany}
             quarters={quarters}
             onSelectCompany={handleSelectCompany}
           />
@@ -389,7 +465,7 @@ export const App: React.FC = () => {
 
         {currentStage === 'scenarios' && (
           <ScenarioForecastingStage
-            company={activeCompany}
+            company={effectiveCompany}
             inputs={inputs}
             valuation={valuation}
             onChangeInputs={setInputs}
@@ -399,7 +475,7 @@ export const App: React.FC = () => {
 
         {currentStage === 'valuation' && (
           <ValuationRangeStage
-            company={activeCompany}
+            company={effectiveCompany}
             valuation={valuation}
             inputs={inputs}
             baseDeliveries={baseQuarter.deliveries.value}
@@ -410,7 +486,7 @@ export const App: React.FC = () => {
 
         {currentStage === 'market-implied' && (
           <MarketImpliedStage
-            company={activeCompany}
+            company={effectiveCompany}
             inputs={inputs}
             valuation={valuation}
             baseDeliveries={baseQuarter.deliveries.value}
@@ -427,7 +503,7 @@ export const App: React.FC = () => {
       <QuickSandboxDrawer
         isOpen={isSandboxOpen}
         onClose={() => setIsSandboxOpen(false)}
-        company={activeCompany}
+        company={effectiveCompany}
         inputs={inputs}
         valuation={valuation}
         onChangeInputs={setInputs}
@@ -463,7 +539,7 @@ export const App: React.FC = () => {
       <ResearchMemoModal
         isOpen={isMemoOpen}
         onClose={() => setIsMemoOpen(false)}
-        activeCompany={activeCompany}
+        activeCompany={effectiveCompany}
         onSwitchCompany={(cid) => {
           const comp = COMPANIES.find((c) => c.id === cid);
           if (comp) handleSelectCompany(comp);
@@ -476,11 +552,11 @@ export const App: React.FC = () => {
           <div className="flex items-center gap-2">
             <span className="font-bold text-slate-400">Eugene Finance</span>
             <span>·</span>
-            <span>公司经营、估值与市场隐含预期实验室 (v3.1 深度交互与美学版)</span>
+            <span>公司经营、估值与市场隐含预期实验室 (v3.2 实时行情与最新财报版)</span>
           </div>
           <div className="flex items-center gap-4 text-[11px] font-mono">
-            <span>SEC EDGAR XBRL</span>
-            <span>巨潮资讯 (Cninfo)</span>
+            <span>SEC EDGAR XBRL (Live)</span>
+            <span>腾讯财经全市场实时行情</span>
             <span>Michael Mauboussin 预期投资学</span>
           </div>
         </div>

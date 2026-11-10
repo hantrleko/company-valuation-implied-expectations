@@ -91,6 +91,10 @@ export interface Company {
   
   // Market Snapshot (Latest Available / Current)
   currentStockPrice: number;
+  filingBenchmarkPrice?: number; // Historical price when the 10-K filing was released
+  livePrice?: number; // Fetched live real-time price
+  livePriceChangePercent?: number; // Daily % change
+  liveTimestamp?: string; // e.g. "15:30:00 EST"
   sharesOutstanding: number; // in Millions
   marketCap: number; // in Millions
   totalDebt: number; // in Millions

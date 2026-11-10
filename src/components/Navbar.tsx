@@ -2,7 +2,8 @@ import React from 'react';
 import { Company, IndustryId } from '../types/financial';
 import { COMPANIES } from '../data/companies';
 import { formatCurrency } from '../utils/formatters';
-import { BookOpen, Activity, Cpu, Car, Search, Command } from 'lucide-react';
+import { BookOpen, Activity, Cpu, Car, Search, Command, Radio } from 'lucide-react';
+import { LiveQuoteItem } from '../utils/liveQuoteService';
 
 interface NavbarProps {
   activeIndustry: IndustryId;
@@ -11,6 +12,7 @@ interface NavbarProps {
   onSelectCompany: (company: Company) => void;
   onOpenMemos: () => void;
   onOpenCommandPalette: () => void;
+  liveQuotes?: Record<string, LiveQuoteItem>;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -19,7 +21,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   activeCompany,
   onSelectCompany,
   onOpenMemos,
-  onOpenCommandPalette
+  onOpenCommandPalette,
+  liveQuotes = {}
 }) => {
   const currentIndustryCompanies = COMPANIES.filter((c) => c.industryId === activeIndustry);
 
@@ -36,8 +39,8 @@ export const Navbar: React.FC<NavbarProps> = ({
               <span className="text-[10px] font-mono tracking-widest text-cyan-400 font-bold uppercase">
                 Eugene Finance ｜ 02 公司与产业
               </span>
-              <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-700/60 font-mono font-bold">
-                v3.1 深度交互与美学版
+              <span className="text-[10px] px-2 py-0.2 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-700/60 font-mono font-bold flex items-center gap-1">
+                <Radio className="w-2.5 h-2.5 animate-pulse text-emerald-400" /> v3.2 实时行情与财报版
               </span>
             </div>
             <h1 className="text-xs sm:text-sm font-bold text-slate-100 flex items-center gap-1.5">
@@ -80,16 +83,13 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
         </div>
 
-        {/* Company Quick Switcher with Indicator Lights */}
+        {/* Company Quick Switcher with Indicator Lights & Live Quotes */}
         <div className="flex items-center gap-1.5 bg-slate-950/90 p-1 rounded-xl border border-slate-800 overflow-x-auto scrollbar-none">
           {currentIndustryCompanies.map((comp) => {
             const isSelected = comp.id === activeCompany.id;
-            // Simulated valuation indicator dot: TSLA/NIO overvalued (amber/rose), BYD/LI/TSM/ASML undervalued (green)
-            const indicatorColor = comp.id === 'byd' || comp.id === 'tsm' || comp.id === 'asml' 
-              ? 'bg-emerald-400' 
-              : comp.id === 'tsla' || comp.id === 'nvda' 
-                ? 'bg-amber-400' 
-                : 'bg-cyan-400';
+            const quote = liveQuotes[comp.id];
+            const currentP = quote?.price || comp.currentStockPrice;
+            const changeP = quote?.changePercent;
 
             return (
               <button
@@ -101,12 +101,16 @@ export const Navbar: React.FC<NavbarProps> = ({
                     : 'text-slate-400 hover:text-slate-200 hover:bg-slate-850'
                 }`}
               >
-                <span className={`w-1.5 h-1.5 rounded-full ${indicatorColor}`}></span>
                 <span className="font-mono">{comp.ticker.replace('.SZ', '')}</span>
                 <span className="text-[11px] opacity-80">{comp.chineseName}</span>
-                <span className="font-mono text-[10px] text-slate-500">
-                  {comp.currencySymbol}{comp.currentStockPrice}
+                <span className="font-mono text-[10px] text-slate-300 font-bold">
+                  {comp.currencySymbol}{currentP}
                 </span>
+                {changeP !== undefined && (
+                  <span className={`font-mono text-[9px] ${changeP >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {changeP >= 0 ? '+' : ''}{changeP}%
+                  </span>
+                )}
               </button>
             );
           })}

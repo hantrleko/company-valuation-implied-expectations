@@ -1,7 +1,7 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Company, ValuationOutput, ForecastInputs, AccountingOptions } from '../types/financial';
 import { formatCurrency, formatPercent } from '../utils/formatters';
-import { Sliders, ArrowUpRight, ArrowDownRight, Target, Compass, Flame, ShieldAlert, Sparkles, Zap, Check } from 'lucide-react';
+import { Sliders, ArrowUpRight, ArrowDownRight, Target, Compass, Flame, ShieldAlert, Sparkles, Zap, Check, Edit3, RotateCcw, Clock } from 'lucide-react';
 
 interface LiveValuationHudProps {
   company: Company;
@@ -13,6 +13,10 @@ interface LiveValuationHudProps {
   impliedCapYears: number;
   onOpenSandbox: () => void;
   isSandboxOpen: boolean;
+  activePriceMode: 'live' | 'filing' | 'custom';
+  onSelectPriceMode: (mode: 'live' | 'filing' | 'custom', customVal?: number) => void;
+  liveQuoteTimestamp?: string;
+  isLiveConnected?: boolean;
 }
 
 export const LiveValuationHud: React.FC<LiveValuationHudProps> = ({
@@ -24,10 +28,17 @@ export const LiveValuationHud: React.FC<LiveValuationHudProps> = ({
   impliedMargin,
   impliedCapYears,
   onOpenSandbox,
-  isSandboxOpen
+  isSandboxOpen,
+  activePriceMode,
+  onSelectPriceMode,
+  liveQuoteTimestamp = '刚刚',
+  isLiveConnected = true
 }) => {
   const isUndervalued = valuation.marginOfSafety > 0;
-  const growthGap = impliedGrowth - inputs.volumeGrowthYears1to5; // Positive means market requires MORE growth than our model assumes
+  const growthGap = impliedGrowth - inputs.volumeGrowthYears1to5;
+
+  const [isEditingPrice, setIsEditingPrice] = useState(false);
+  const [tempPriceInput, setTempPriceInput] = useState(valuation.currentPrice.toString());
 
   // Range gauge calculation
   const minVal = Math.min(valuation.bearPrice, valuation.currentPrice * 0.7);
@@ -36,21 +47,109 @@ export const LiveValuationHud: React.FC<LiveValuationHudProps> = ({
   const pricePct = Math.min(Math.max(((valuation.currentPrice - minVal) / rangeSpan) * 100, 2), 98);
   const fairValuePct = Math.min(Math.max(((valuation.expectedValuePerShare - minVal) / rangeSpan) * 100, 2), 98);
 
+  const handlePriceSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const val = parseFloat(tempPriceInput);
+    if (!isNaN(val) && val > 0) {
+      onSelectPriceMode('custom', val);
+      setIsEditingPrice(false);
+    }
+  };
+
   return (
-    <div className="bg-slate-950/90 border-b border-slate-800/80 backdrop-blur-md sticky top-[53px] z-25 py-2 px-4 shadow-lg transition-all">
+    <div className="bg-slate-950/95 border-b border-slate-800/80 backdrop-blur-md sticky top-[53px] z-25 py-2 px-4 shadow-xl transition-all">
       <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3 text-xs">
-        {/* Left: Real-time Price vs Fair Value & Gauge */}
-        <div className="flex items-center gap-4 flex-wrap">
+        {/* Left: Price Mode Switcher & Real-time Value */}
+        <div className="flex items-center gap-3 flex-wrap">
+          {/* Live Quote Status Badge */}
+          <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-slate-900 border border-slate-800 font-mono text-[10px]">
+            <span className={`w-1.5 h-1.5 rounded-full ${isLiveConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}></span>
+            <span className="text-slate-300">{isLiveConnected ? '实时行情直连' : '收盘快照'}</span>
+            <span className="text-slate-500">· {liveQuoteTimestamp}</span>
+          </div>
+
+          {/* Price Time-Machine Switcher (三档切换) */}
+          <div className="flex items-center gap-1 bg-slate-900 p-0.5 rounded-lg border border-slate-800 font-mono text-[11px]">
+            <button
+              onClick={() => {
+                setIsEditingPrice(false);
+                onSelectPriceMode('live');
+              }}
+              className={`px-2 py-0.5 rounded transition-all flex items-center gap-1 ${
+                activePriceMode === 'live' 
+                  ? 'bg-cyan-600 text-white font-bold shadow-sm' 
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <span>实时市价</span>
+              <span className="text-[10px] opacity-80">{company.currencySymbol}{company.currentStockPrice}</span>
+            </button>
+
+            <button
+              onClick={() => {
+                setIsEditingPrice(false);
+                onSelectPriceMode('filing');
+              }}
+              className={`px-2 py-0.5 rounded transition-all flex items-center gap-1 ${
+                activePriceMode === 'filing' 
+                  ? 'bg-amber-600 text-white font-bold shadow-sm' 
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+              title="2024财报发布基准日股价"
+            >
+              <span>年报发布日</span>
+              <span className="text-[10px] opacity-80">{company.currencySymbol}{company.filingBenchmarkPrice || 138.5}</span>
+            </button>
+
+            {!isEditingPrice ? (
+              <button
+                onClick={() => {
+                  setTempPriceInput(valuation.currentPrice.toString());
+                  setIsEditingPrice(true);
+                }}
+                className={`px-2 py-0.5 rounded transition-all flex items-center gap-1 ${
+                  activePriceMode === 'custom' 
+                    ? 'bg-purple-600 text-white font-bold shadow-sm' 
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+                title="输入任意假设价格反解隐含预期"
+              >
+                <Edit3 className="w-3 h-3" />
+                <span>{activePriceMode === 'custom' ? `自定义 $${valuation.currentPrice}` : '自定义'}</span>
+              </button>
+            ) : (
+              <form onSubmit={handlePriceSubmit} className="flex items-center gap-1">
+                <input
+                  type="number"
+                  step="0.1"
+                  autoFocus
+                  value={tempPriceInput}
+                  onChange={(e) => setTempPriceInput(e.target.value)}
+                  className="w-16 bg-slate-950 border border-cyan-500 text-cyan-300 px-1 py-0.5 rounded text-[11px] font-mono focus:outline-none"
+                  placeholder="价格"
+                />
+                <button
+                  type="submit"
+                  className="px-1.5 py-0.5 rounded bg-cyan-600 text-white font-bold text-[10px]"
+                >
+                  确定
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsEditingPrice(false)}
+                  className="px-1 py-0.5 text-slate-400 hover:text-slate-200 text-[10px]"
+                >
+                  ✕
+                </button>
+              </form>
+            )}
+          </div>
+
+          {/* Current Fair Value */}
           <div className="flex items-center gap-2">
-            <span className="font-mono font-bold text-slate-100 text-sm">
-              {company.ticker.replace('.SZ', '')}
-            </span>
-            <span className="font-mono text-slate-400">
-              {formatCurrency(valuation.currentPrice, company.currencySymbol, 2)}
-            </span>
-            <span className="text-slate-600">vs</span>
+            <span className="text-slate-500 font-mono">|</span>
             <span className="text-slate-400">公允值:</span>
-            <span className="font-mono font-bold text-cyan-300 text-sm">
+            <span className="font-mono font-black text-cyan-300 text-sm">
               {formatCurrency(valuation.expectedValuePerShare, company.currencySymbol, 2)}
             </span>
           </div>
@@ -67,12 +166,11 @@ export const LiveValuationHud: React.FC<LiveValuationHudProps> = ({
           </div>
 
           {/* Mini Visual Dual-Cursor Range Bar */}
-          <div className="hidden lg:flex items-center gap-2">
+          <div className="hidden xl:flex items-center gap-2">
             <span className="text-[10px] font-mono text-slate-500">
               {formatCurrency(minVal, company.currencySymbol, 0)}
             </span>
-            <div className="relative w-32 h-2 bg-slate-800 rounded-full overflow-visible my-auto">
-              {/* Range fill */}
+            <div className="relative w-28 h-2 bg-slate-800 rounded-full overflow-visible my-auto">
               <div 
                 className="absolute top-0 bottom-0 bg-cyan-950/60 rounded-full"
                 style={{ 
@@ -80,17 +178,15 @@ export const LiveValuationHud: React.FC<LiveValuationHudProps> = ({
                   width: `${Math.abs(fairValuePct - pricePct)}%` 
                 }}
               />
-              {/* Fair Value cursor */}
               <div 
                 className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full bg-cyan-400 border border-slate-950 shadow-[0_0_8px_#22d3ee]"
                 style={{ left: `${fairValuePct}%` }}
                 title={`模型公允值: ${valuation.expectedValuePerShare}`}
               />
-              {/* Current Price cursor */}
               <div 
                 className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full bg-amber-400 border border-slate-950 shadow-[0_0_8px_#fbbf24]"
                 style={{ left: `${pricePct}%` }}
-                title={`当前市价: ${valuation.currentPrice}`}
+                title={`当前计算市价: ${valuation.currentPrice}`}
               />
             </div>
             <span className="text-[10px] font-mono text-slate-500">
@@ -100,10 +196,10 @@ export const LiveValuationHud: React.FC<LiveValuationHudProps> = ({
         </div>
 
         {/* Center: Expectation Gap & Reverse Signals */}
-        <div className="flex items-center gap-3 font-mono text-[11px] flex-wrap">
+        <div className="flex items-center gap-2.5 font-mono text-[11px] flex-wrap">
           <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800">
             <Target className="w-3.5 h-3.5 text-amber-400" />
-            <span className="text-slate-400">隐含销量CAGR:</span>
+            <span className="text-slate-400">当前市价隐含CAGR:</span>
             <span className="text-amber-300 font-bold">{formatPercent(impliedGrowth)}</span>
             <span className="text-slate-500 text-[10px] hidden sm:inline">
               (我方: {formatPercent(inputs.volumeGrowthYears1to5)})
@@ -121,13 +217,6 @@ export const LiveValuationHud: React.FC<LiveValuationHudProps> = ({
             <span className="text-slate-400">MICAP优势期:</span>
             <span className="text-purple-300 font-bold">{impliedCapYears}年</span>
           </div>
-
-          {/* Accounting status pill */}
-          {accountingOptions.capitalizeRD && (
-            <span className="hidden xl:inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded bg-purple-950/60 text-purple-300 border border-purple-800/50">
-              <Sparkles className="w-3 h-3" /> 研发资本化
-            </span>
-          )}
         </div>
 
         {/* Right: Quick Sandbox Drawer Trigger */}
