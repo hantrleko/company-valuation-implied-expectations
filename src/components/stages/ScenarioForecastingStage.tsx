@@ -1,7 +1,8 @@
-import React from 'react';
-import { Company, ForecastInputs, ValuationOutput } from '../../types/financial';
+import React, { useState, useEffect } from 'react';
+import { Company, ForecastInputs, ValuationOutput, CapmWaccConfig } from '../../types/financial';
+import { COMPANY_CAPM_CONFIGS, computeWaccFromCapm } from '../../data/v4InstitutionalData';
 import { formatNumber, formatCurrency, formatPercent } from '../../utils/formatters';
-import { Sliders, RotateCcw, TrendingUp, ShieldAlert, Sparkles, PieChart, Layers, Target } from 'lucide-react';
+import { Sliders, RotateCcw, TrendingUp, ShieldAlert, Sparkles, PieChart, Layers, Target, Landmark, Zap } from 'lucide-react';
 
 interface ScenarioForecastingStageProps {
   company: Company;
@@ -18,6 +19,32 @@ export const ScenarioForecastingStage: React.FC<ScenarioForecastingStageProps> =
   onChangeInputs,
   onApplyPreset
 }) => {
+  const [capmConfig, setCapmConfig] = useState<CapmWaccConfig>(() => COMPANY_CAPM_CONFIGS[company.id] || COMPANY_CAPM_CONFIGS['nvda']);
+
+  useEffect(() => {
+    setCapmConfig(COMPANY_CAPM_CONFIGS[company.id] || COMPANY_CAPM_CONFIGS['nvda']);
+  }, [company.id]);
+
+  const capmDerived = computeWaccFromCapm(capmConfig, inputs.taxRate);
+
+  const handleCapmChange = (newCfg: CapmWaccConfig) => {
+    setCapmConfig(newCfg);
+    const derived = computeWaccFromCapm(newCfg, inputs.taxRate);
+    onChangeInputs({
+      ...inputs,
+      wacc: Number(Math.min(Math.max(derived.wacc, 0.055), 0.16).toFixed(4))
+    });
+  };
+
+  const applyMacroShock = (deltaRf: number, deltaErp: number = 0) => {
+    const baseCfg = COMPANY_CAPM_CONFIGS[company.id] || COMPANY_CAPM_CONFIGS['nvda'];
+    const nextCfg: CapmWaccConfig = {
+      ...baseCfg,
+      riskFreeRate: Number(Math.max(baseCfg.riskFreeRate + deltaRf, 0.01).toFixed(4)),
+      equityRiskPremium: Number(Math.max(baseCfg.equityRiskPremium + deltaErp, 0.03).toFixed(4))
+    };
+    handleCapmChange(nextCfg);
+  };
   const handleSliderChange = (field: keyof ForecastInputs, val: any) => {
     onChangeInputs({
       ...inputs,
@@ -374,6 +401,126 @@ export const ScenarioForecastingStage: React.FC<ScenarioForecastingStageProps> =
               </div>
             );
           })}
+        </div>
+      </div>
+
+      {/* V4.0 MODULE 3: CAPM / WACC Capital Cost Penetration & Macro Rate Stress Test Builder */}
+      <div className="bg-slate-900 border border-indigo-800/50 rounded-2xl p-5 shadow-xl space-y-4">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+          <div>
+            <div className="flex items-center gap-2">
+              <Landmark className="w-5 h-5 text-indigo-400" />
+              <h3 className="text-sm font-bold text-slate-100">
+                CAPM / WACC 资本成本底层穿透推导器与宏观利率压力测试 ({capmConfig.riskFreeBenchmark} 联动)
+              </h3>
+            </div>
+            <p className="text-[11px] text-slate-400 mt-0.5 font-mono">
+              公式：WACC = (E/V) × [Rf + βL × ERP] + (D/V) × Kd × (1 - T) ｜ 宏观无风险利率波动通过高 Beta 杠杆非线性传导至远期现金流折现价值
+            </p>
+          </div>
+
+          {/* Macro Rate Shock Quick Buttons */}
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <button
+              onClick={() => applyMacroShock(-0.005, 0)}
+              className="px-2.5 py-1 rounded-lg bg-emerald-950/70 hover:bg-emerald-900/80 text-emerald-300 border border-emerald-800/60 text-[11px] font-mono transition-colors"
+            >
+              📉 降息宽松 (-50bps Rf)
+            </button>
+            <button
+              onClick={() => applyMacroShock(0, 0)}
+              className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-[11px] font-mono transition-colors"
+            >
+              ⚖️ 当前宏观基准
+            </button>
+            <button
+              onClick={() => applyMacroShock(0.005, 0)}
+              className="px-2.5 py-1 rounded-lg bg-amber-950/70 hover:bg-amber-900/80 text-amber-300 border border-amber-800/60 text-[11px] font-mono transition-colors"
+            >
+              📈 通胀加息 (+50bps Rf)
+            </button>
+            <button
+              onClick={() => applyMacroShock(0.0075, 0.005)}
+              className="px-2.5 py-1 rounded-lg bg-rose-950/70 hover:bg-rose-900/80 text-rose-300 border border-rose-800/60 text-[11px] font-mono transition-colors"
+            >
+              🌪️ 滞胀风险 (+75bps Rf & +50bps ERP)
+            </button>
+          </div>
+        </div>
+
+        {/* CAPM Interactive Sliders & Live Breakdown */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          {/* 1. Risk-Free Rate Rf */}
+          <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+            <div className="flex items-center justify-between text-xs font-mono">
+              <span className="text-slate-400">无风险利率 Rf ({capmConfig.riskFreeBenchmark})</span>
+              <span className="text-cyan-300 font-bold">{(capmConfig.riskFreeRate * 100).toFixed(2)}%</span>
+            </div>
+            <input
+              type="range"
+              min={0.01}
+              max={0.065}
+              step={0.0005}
+              value={capmConfig.riskFreeRate}
+              onChange={(e) => handleCapmChange({ ...capmConfig, riskFreeRate: parseFloat(e.target.value) })}
+              className="w-full accent-cyan-500 h-1.5 bg-slate-800 rounded-lg cursor-pointer"
+            />
+            <div className="text-[10px] text-slate-500">
+              {capmConfig.riskFreeBenchmark === 'US10Y' ? '锚定10年期美债收益率基准' : '锚定10年期中国国债收益率基准'}
+            </div>
+          </div>
+
+          {/* 2. Levered Beta */}
+          <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+            <div className="flex items-center justify-between text-xs font-mono">
+              <span className="text-slate-400">个股杠杆贝塔 (Levered β)</span>
+              <span className="text-purple-300 font-bold">{capmConfig.leveredBeta.toFixed(2)}</span>
+            </div>
+            <input
+              type="range"
+              min={0.7}
+              max={2.4}
+              step={0.05}
+              value={capmConfig.leveredBeta}
+              onChange={(e) => handleCapmChange({ ...capmConfig, leveredBeta: parseFloat(e.target.value) })}
+              className="w-full accent-purple-500 h-1.5 bg-slate-800 rounded-lg cursor-pointer"
+            />
+            <div className="text-[10px] text-slate-500">
+              反映算力/电动车周期对市场波动的放大系数
+            </div>
+          </div>
+
+          {/* 3. Equity Risk Premium (ERP) */}
+          <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+            <div className="flex items-center justify-between text-xs font-mono">
+              <span className="text-slate-400">股权风险溢价 (ERP)</span>
+              <span className="text-amber-300 font-bold">{(capmConfig.equityRiskPremium * 100).toFixed(2)}%</span>
+            </div>
+            <input
+              type="range"
+              min={0.035}
+              max={0.08}
+              step={0.001}
+              value={capmConfig.equityRiskPremium}
+              onChange={(e) => handleCapmChange({ ...capmConfig, equityRiskPremium: parseFloat(e.target.value) })}
+              className="w-full accent-amber-500 h-1.5 bg-slate-800 rounded-lg cursor-pointer"
+            />
+            <div className="text-[10px] text-slate-500">
+              Damodaran 市场隐含股权风险补偿要求
+            </div>
+          </div>
+
+          {/* 4. Synthesized WACC Output */}
+          <div className="p-3.5 rounded-xl bg-indigo-950/30 border border-indigo-700/50 flex flex-col justify-between">
+            <div className="flex items-center justify-between text-xs font-mono">
+              <span className="text-indigo-300 font-bold">CAPM 推导 WACC</span>
+              <span className="text-lg font-black text-emerald-400">{(inputs.wacc * 100).toFixed(2)}%</span>
+            </div>
+            <div className="text-[11px] font-mono text-slate-300 space-y-0.5 mt-1">
+              <div>股权成本 Ke: <strong>{(capmDerived.costOfEquity * 100).toFixed(2)}%</strong> (权重 {(capmDerived.equityWeight * 100).toFixed(0)}%)</div>
+              <div>税后债务成本 Kd(1-T): <strong>{(capmDerived.afterTaxCostOfDebt * 100).toFixed(2)}%</strong></div>
+            </div>
+          </div>
         </div>
       </div>
 

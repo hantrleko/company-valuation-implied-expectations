@@ -1,8 +1,9 @@
 import React from 'react';
 import { Company, ValuationOutput, ForecastInputs } from '../../types/financial';
 import { calculateForwardDCF } from '../../utils/dcfSolver';
+import { COMPANY_SEGMENTS } from '../../data/v4InstitutionalData';
 import { formatNumber, formatCurrency, formatPercent } from '../../utils/formatters';
-import { DollarSign, ShieldCheck, Scale, ArrowUpRight, ArrowDownRight, Layers, BarChart3, Activity, Compass, Flame } from 'lucide-react';
+import { DollarSign, ShieldCheck, Scale, ArrowUpRight, ArrowDownRight, Layers, BarChart3, Activity, Compass, Flame, PieChart } from 'lucide-react';
 
 interface ValuationRangeStageProps {
   company: Company;
@@ -369,6 +370,102 @@ export const ValuationRangeStage: React.FC<ValuationRangeStageProps> = ({
           </div>
         </div>
       </div>
+
+      {/* V4.0 MODULE 2: SOTP (Sum-of-the-Parts) Multi-Segment Valuation Waterfall Bridge */}
+      {(() => {
+        const segments = COMPANY_SEGMENTS[company.id] || [];
+        if (!segments.length) return null;
+
+        // Calculate SOTP EV contribution per segment based on Year-1 projected revenue & segment EV/Sales multiple,
+        // normalized to align with the DCF Enterprise Value so investors see both standalone SOTP & DCF share contribution
+        const year1Rev = valuation.forecastYears[0]?.revenue || baseRevenue;
+        const rawSegmentEvs = segments.map(s => {
+          const segRev = Math.round(year1Rev * s.revenueShare2025);
+          const rawEv = Math.round(segRev * s.targetEvSalesMultiple);
+          return { ...s, segRev, rawEv };
+        });
+        const totalRawSotpEv = rawSegmentEvs.reduce((acc, s) => acc + s.rawEv, 0) || 1;
+        const sotpEquityVal = totalRawSotpEv - valuation.netDebt;
+        const sotpPerShare = Number((sotpEquityVal / company.sharesOutstanding).toFixed(2));
+        const netCashPerShare = Number((-valuation.netDebt / company.sharesOutstanding).toFixed(2));
+
+        return (
+          <div className="bg-slate-900 border border-cyan-800/40 rounded-2xl p-5 shadow-xl space-y-4">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-2 pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <PieChart className="w-5 h-5 text-cyan-400" />
+                <h3 className="text-sm font-bold text-slate-100">
+                  SOTP 多业务分部加总估值瀑布图 (Sum-of-the-Parts Valuation Bridge - V4.0)
+                </h3>
+              </div>
+              <div className="text-xs font-mono text-slate-300">
+                SOTP 分部加总公允价值: <strong className="text-cyan-300 text-sm">{company.currencySymbol}{sotpPerShare} / 股</strong>
+                <span className="text-slate-500 ml-2">(总企业价值 EV: {company.currencySymbol}{formatNumber(totalRawSotpEv)}M)</span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              {rawSegmentEvs.map((seg) => {
+                const segPerShare = Number((seg.rawEv / company.sharesOutstanding).toFixed(2));
+                const evSharePct = (seg.rawEv / totalRawSotpEv) * 100;
+                const barColor =
+                  seg.category === 'core'
+                    ? 'bg-cyan-500'
+                    : seg.category === 'growth-curve'
+                    ? 'bg-amber-500'
+                    : 'bg-purple-500';
+
+                return (
+                  <div key={seg.id} className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2 flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center justify-between text-[10px] font-mono text-slate-400">
+                        <span>{seg.category === 'core' ? '核心基本盘' : seg.category === 'growth-curve' ? '高增第二曲线' : '高毛利软件生态'}</span>
+                        <span>目标 {seg.targetEvSalesMultiple}x EV/S</span>
+                      </div>
+                      <div className="text-xs font-bold text-slate-100 mt-1">{seg.name}</div>
+                    </div>
+
+                    <div className="space-y-1.5 pt-2 border-t border-slate-900">
+                      <div className="flex items-baseline justify-between font-mono">
+                        <span className="text-lg font-black text-cyan-300">
+                          {company.currencySymbol}{segPerShare} <span className="text-[10px] font-normal text-slate-400">/股</span>
+                        </span>
+                        <span className="text-xs text-emerald-400 font-bold">贡献 {evSharePct.toFixed(1)}%</span>
+                      </div>
+                      <div className="w-full h-1.5 bg-slate-900 rounded-full overflow-hidden">
+                        <div className={`h-full ${barColor}`} style={{ width: `${Math.min(evSharePct, 100)}%` }} />
+                      </div>
+                      <div className="text-[10px] font-mono text-slate-500">
+                        分部营收: {company.currencySymbol}{formatNumber(seg.segRev)}M · 分部EV: {company.currencySymbol}{formatNumber(seg.rawEv)}M
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* 4th Column: Net Cash / Debt & Total SOTP Per Share */}
+              <div className="p-4 rounded-xl bg-cyan-950/20 border border-cyan-800/40 space-y-2 flex flex-col justify-between">
+                <div>
+                  <span className="text-[10px] font-mono text-cyan-400 uppercase">净现金调节项 & SOTP总计</span>
+                  <div className="text-xs font-bold text-slate-100 mt-1">每股净现金 + 三大分部加总</div>
+                  <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
+                    每股净现金垫: <strong className="font-mono text-amber-300">{netCashPerShare >= 0 ? '+' : ''}{company.currencySymbol}{netCashPerShare}</strong>
+                  </p>
+                </div>
+                <div className="pt-2 border-t border-cyan-900/40 font-mono">
+                  <div className="text-[11px] text-slate-400">SOTP 合成目标价 vs 现价</div>
+                  <div className="text-xl font-black text-emerald-400 mt-0.5">
+                    {company.currencySymbol}{sotpPerShare}{' '}
+                    <span className="text-xs text-slate-300 font-normal">
+                      (现价 {company.currencySymbol}{company.currentStockPrice})
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };

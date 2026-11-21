@@ -9,19 +9,20 @@ import { TSM_DATA } from './raw/tsmData';
 import { AMD_DATA } from './raw/amdData';
 import { AVGO_DATA } from './raw/avgoData';
 import { ASML_DATA } from './raw/asmlData';
+import { FY2025_EXPANSION } from './raw/fy2025Expansion';
 
 export const HISTORICAL_DATA: Record<string, QuarterData[]> = {
-  // EV Mobility
-  tsla: TSLA_DATA,
-  byd: BYD_DATA,
-  li: LI_DATA,
-  nio: NIO_DATA,
-  xpev: XPEV_DATA,
+  // EV Mobility (12 Quarters + 3 Annual Reports: 2023 Q1 - 2025 FY)
+  tsla: [...TSLA_DATA, ...(FY2025_EXPANSION.tsla || [])],
+  byd: [...BYD_DATA, ...(FY2025_EXPANSION.byd || [])],
+  li: [...LI_DATA, ...(FY2025_EXPANSION.li || [])],
+  nio: [...NIO_DATA, ...(FY2025_EXPANSION.nio || [])],
+  xpev: [...XPEV_DATA, ...(FY2025_EXPANSION.xpev || [])],
   
-  // Semiconductors
-  nvda: NVDA_DATA,
-  tsm: TSM_DATA,
-  amd: AMD_DATA,
-  avgo: AVGO_DATA,
-  asml: ASML_DATA
+  // Semiconductors (12 Quarters + 3 Annual Reports: 2023 Q1 - 2025 FY)
+  nvda: [...NVDA_DATA, ...(FY2025_EXPANSION.nvda || [])],
+  tsm: [...TSM_DATA, ...(FY2025_EXPANSION.tsm || [])],
+  amd: [...AMD_DATA, ...(FY2025_EXPANSION.amd || [])],
+  avgo: [...AVGO_DATA, ...(FY2025_EXPANSION.avgo || [])],
+  asml: [...ASML_DATA, ...(FY2025_EXPANSION.asml || [])]
 };

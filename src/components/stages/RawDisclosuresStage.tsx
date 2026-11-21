@@ -92,13 +92,13 @@ export const RawDisclosuresStage: React.FC<RawDisclosuresStageProps> = ({
     }
 
     if (viewMode === 'yoy') {
-      // Find matching quarter from 4 quarters ago (e.g. 2024-Q1 vs 2023-Q1)
+      // Find matching quarter or annual report from 1 year ago (e.g. 2025-Q1 vs 2024-Q1, or 2025-FY vs 2024-FY)
       const currentPeriod = q.period;
       const parts = currentPeriod.split('-');
-      if (parts.length === 2 && parts[1].startsWith('Q')) {
+      if (parts.length === 2) {
         const year = parseInt(parts[0], 10);
-        const qtr = parts[1];
-        const prevYearPeriod = `${year - 1}-${qtr}`;
+        const suffix = parts[1];
+        const prevYearPeriod = `${year - 1}-${suffix}`;
         const prevQuarter = quarters.find(item => item.period === prevYearPeriod);
         if (prevQuarter) {
           const prevVal = metricExtractor(prevQuarter).value;
@@ -119,6 +119,18 @@ export const RawDisclosuresStage: React.FC<RawDisclosuresStageProps> = ({
     return quarters.map(q => extractor(q).value);
   };
 
+  const fy24 = quarters.find(q => q.period === '2024-FY') || quarters[0];
+  const fy25 = quarters.find(q => q.period === '2025-FY') || quarters[quarters.length - 1];
+  const revYoY25 = fy24.totalRevenue.value > 0
+    ? ((fy25.totalRevenue.value - fy24.totalRevenue.value) / fy24.totalRevenue.value) * 100
+    : 0;
+  const ebitYoY25 = fy24.operatingProfit.value !== 0
+    ? ((fy25.operatingProfit.value - fy24.operatingProfit.value) / Math.abs(fy24.operatingProfit.value)) * 100
+    : 0;
+  const volYoY25 = fy24.deliveries.value > 0
+    ? ((fy25.deliveries.value - fy24.deliveries.value) / fy24.deliveries.value) * 100
+    : 0;
+
   return (
     <div className="space-y-6 animate-fadeIn">
       {/* Top Banner */}
@@ -126,20 +138,20 @@ export const RawDisclosuresStage: React.FC<RawDisclosuresStageProps> = ({
         <div>
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-xs font-mono uppercase tracking-wider text-cyan-400 font-semibold px-2 py-0.5 rounded bg-cyan-950 border border-cyan-800/60">
-              阶段 01 ｜ 原始披露审计数据库
+              阶段 01 ｜ 原始披露审计数据库 (V4.0 扩充至 2025 全年)
             </span>
             <span className="inline-flex items-center gap-1 text-[11px] font-mono px-2 py-0.5 rounded bg-emerald-950/60 text-emerald-400 border border-emerald-800/40">
-              <CheckCircle2 className="w-3 h-3" /> 8季度+2年度审计核准
+              <CheckCircle2 className="w-3 h-3" /> 12季度+3年度审计核准 (2023Q1 - 2025FY)
             </span>
             <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300">
               行业: {company.industry}
             </span>
           </div>
           <h2 className="text-xl font-bold text-slate-100 mt-1.5 flex items-center gap-2">
-            <span>{company.chineseName} ({company.ticker}) 官方披露历史底稿</span>
+            <span>{company.chineseName} ({company.ticker}) 官方披露历史底稿与 XBRL 同步库</span>
           </h2>
           <p className="text-xs text-slate-400 mt-1 max-w-3xl leading-relaxed">
-            涵盖 2023Q1 至 2024Q4 连续 8 个季度及年度审计报告。点击表格中 <strong className="text-cyan-300 font-medium">任意数值单元格</strong> 可穿透查看官方报告类型、披露日期、Accession Number、报表章节与附注原文。
+            涵盖 2023Q1 至 2025Q4 连续 12 个季度及 FY23/FY24/FY25 三份完整年度报告。点击表格中 <strong className="text-cyan-300 font-medium">任意数值单元格</strong> 可穿透查看官方报告类型、披露日期、Accession Number、报表章节与附注原文。
           </p>
         </div>
 
@@ -160,7 +172,7 @@ export const RawDisclosuresStage: React.FC<RawDisclosuresStageProps> = ({
               className={`px-2.5 py-1 rounded-lg transition-colors ${
                 viewMode === 'yoy' ? 'bg-cyan-600 text-white font-bold' : 'text-slate-400 hover:text-slate-200'
               }`}
-              title="同比去年同季度变动 %"
+              title="同比去年同季度/年度变动 %"
             >
               同比 YoY
             </button>
@@ -169,7 +181,7 @@ export const RawDisclosuresStage: React.FC<RawDisclosuresStageProps> = ({
               className={`px-2.5 py-1 rounded-lg transition-colors ${
                 viewMode === 'qoq' ? 'bg-cyan-600 text-white font-bold' : 'text-slate-400 hover:text-slate-200'
               }`}
-              title="环比上一季度变动 %"
+              title="环比上一期变动 %"
             >
               环比 QoQ
             </button>
@@ -187,6 +199,61 @@ export const RawDisclosuresStage: React.FC<RawDisclosuresStageProps> = ({
             <ExternalLink className="w-3.5 h-3.5 text-cyan-400" />
             <span>{isSec ? 'SEC EDGAR 档案库' : '巨潮资讯网档案库'}</span>
           </a>
+        </div>
+      </div>
+
+      {/* V4.0 NEW: FY2025 vs FY2024 XBRL Audited Filing Expansion & Reconciliation Banner */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="p-4 rounded-2xl bg-slate-900/90 border border-emerald-800/40 shadow-lg">
+          <div className="flex items-center justify-between text-[11px] font-mono text-emerald-400">
+            <span>最新年度审计基准 (FY2025)</span>
+            <span>{fy25.totalRevenue.disclosure.filingType}</span>
+          </div>
+          <div className="text-lg font-black font-mono text-slate-100 mt-1">
+            {fy25.totalRevenue.disclosure.accessionNumber}
+          </div>
+          <div className="text-[11px] text-slate-400 mt-1">
+            披露日期: {fy25.totalRevenue.disclosure.filingDate} · 已完成勾稽核验
+          </div>
+        </div>
+
+        <div className="p-4 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-lg">
+          <div className="text-[11px] text-slate-400">FY2025 物理出货/交付规模</div>
+          <div className="text-xl font-black font-mono text-cyan-300 mt-1">
+            {formatNumber(fy25.deliveries.value)}
+            <span className="text-xs font-bold text-emerald-400 ml-2">
+              {volYoY25 >= 0 ? '+' : ''}{volYoY25.toFixed(1)}% YoY
+            </span>
+          </div>
+          <div className="text-[11px] text-slate-500 font-mono mt-1">
+            对比 FY2024: {formatNumber(fy24.deliveries.value)}
+          </div>
+        </div>
+
+        <div className="p-4 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-lg">
+          <div className="text-[11px] text-slate-400">FY2025 营业总收入 ({company.currencySymbol}M)</div>
+          <div className="text-xl font-black font-mono text-emerald-300 mt-1">
+            {company.currencySymbol}{formatNumber(fy25.totalRevenue.value)}M
+            <span className="text-xs font-bold text-emerald-400 ml-2">
+              {revYoY25 >= 0 ? '+' : ''}{revYoY25.toFixed(1)}% YoY
+            </span>
+          </div>
+          <div className="text-[11px] text-slate-500 font-mono mt-1">
+            对比 FY2024: {company.currencySymbol}{formatNumber(fy24.totalRevenue.value)}M
+          </div>
+        </div>
+
+        <div className="p-4 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-lg">
+          <div className="text-[11px] text-slate-400">FY2025 经营利润 EBIT & 自由现金流</div>
+          <div className="text-xl font-black font-mono text-amber-300 mt-1">
+            {company.currencySymbol}{formatNumber(fy25.operatingProfit.value)}M
+            <span className="text-xs font-bold text-emerald-400 ml-2">
+              {ebitYoY25 >= 0 ? '+' : ''}{ebitYoY25.toFixed(1)}%
+            </span>
+          </div>
+          <div className="text-[11px] text-slate-500 font-mono mt-1">
+            FY25 FCF: {company.currencySymbol}{formatNumber(fy25.freeCashFlow.value)}M (毛利率 {fy25.totalGrossMargin.value.toFixed(1)}%)
+          </div>
         </div>
       </div>
 

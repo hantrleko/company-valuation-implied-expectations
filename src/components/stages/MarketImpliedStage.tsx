@@ -1,8 +1,9 @@
 import React, { useMemo } from 'react';
-import { Company, ForecastInputs, ValuationOutput, ResearchMemo } from '../../types/financial';
+import { Company, ForecastInputs, ValuationOutput, ResearchMemo, BasePeriodMode } from '../../types/financial';
 import { solveImpliedGrowthRate, solveImpliedGrossMargin, solveImpliedCapYears, generateReverseSensitivityGrid } from '../../utils/dcfSolver';
+import { getCompanyExpectationBacktest } from '../../data/v4InstitutionalData';
 import { formatNumber, formatCurrency, formatPercent } from '../../utils/formatters';
-import { Target, AlertTriangle, Compass, CheckCircle2, BookOpen, Flame, ArrowRight, ShieldX, TrendingDown, Sparkles } from 'lucide-react';
+import { Target, AlertTriangle, Compass, CheckCircle2, BookOpen, Flame, ArrowRight, ShieldX, TrendingDown, Sparkles, History, Layers, Swords } from 'lucide-react';
 
 interface MarketImpliedStageProps {
   company: Company;
@@ -14,6 +15,10 @@ interface MarketImpliedStageProps {
   memo: ResearchMemo;
   onOpenMemo: () => void;
   onChangeInputs?: (newInputs: ForecastInputs) => void;
+  basePeriodMode?: BasePeriodMode;
+  fy24Revenue?: number;
+  fy25Revenue?: number;
+  onOpenPeerDuel?: () => void;
 }
 
 export const MarketImpliedStage: React.FC<MarketImpliedStageProps> = ({
@@ -25,7 +30,11 @@ export const MarketImpliedStage: React.FC<MarketImpliedStageProps> = ({
   baseRevenue,
   memo,
   onOpenMemo,
-  onChangeInputs
+  onChangeInputs,
+  basePeriodMode = '2025-FY',
+  fy24Revenue = 0,
+  fy25Revenue = 0,
+  onOpenPeerDuel
 }) => {
   // Numerical Solver to find implied parameters for CURRENT market cap
   const impliedVolumeGrowth = useMemo(() => {
@@ -298,6 +307,163 @@ export const MarketImpliedStage: React.FC<MarketImpliedStageProps> = ({
           </table>
         </div>
       </div>
+
+      {/* V4.0 MODULE 1 & 5A: 2D Price × Fundamental Attribution Matrix & 12-Quarter Implied Expectation Backtest */}
+      {(() => {
+        const filingPrice = company.filingBenchmarkPrice || company.currentStockPrice * 0.78;
+        const totalStockReturnPct = ((company.currentStockPrice - filingPrice) / filingPrice) * 100;
+        const fundamentalExpansionPct = fy24Revenue > 0 ? ((fy25Revenue - fy24Revenue) / fy24Revenue) * 100 : 25;
+        const multipleShiftPct = totalStockReturnPct - fundamentalExpansionPct;
+
+        const backtestPoints = getCompanyExpectationBacktest(
+          company.id,
+          company.currentStockPrice,
+          filingPrice,
+          impliedVolumeGrowth
+        );
+
+        return (
+          <div className="space-y-6">
+            {/* 1. 2D Time-Machine Attribution Card */}
+            <div className="bg-slate-900 border border-emerald-800/40 rounded-2xl p-5 shadow-xl space-y-4">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-2 pb-3 border-b border-slate-800">
+                <div className="flex items-center gap-2">
+                  <Layers className="w-5 h-5 text-emerald-400" />
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-100">
+                      二维时空股价涨幅归因拆解：基本面业绩兑现 (EPS/Revenue) vs. 市场拔估值 (Multiple/PVGO)
+                    </h3>
+                    <p className="text-[11px] text-slate-400">
+                      当前选中基本面基准期：<strong className="text-emerald-300 font-mono">{basePeriodMode}</strong> ｜ 解答“从2024年报发布日至今的股价上涨，究竟是业绩增长推动还是估值泡沫？”
+                    </p>
+                  </div>
+                </div>
+                {onOpenPeerDuel && (
+                  <button
+                    onClick={onOpenPeerDuel}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/40 text-xs font-bold transition-all self-start md:self-auto"
+                  >
+                    <Swords className="w-3.5 h-3.5 text-amber-400" />
+                    <span>与同业龙头对比隐含预期</span>
+                  </button>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="p-4 rounded-xl bg-slate-950 border border-slate-800">
+                  <span className="text-[11px] text-slate-400">1. 跨期股价累计变动 (2024年报日 ➔ 当前)</span>
+                  <div className="text-2xl font-black font-mono text-cyan-300 mt-1">
+                    {totalStockReturnPct >= 0 ? '+' : ''}{totalStockReturnPct.toFixed(1)}%
+                  </div>
+                  <div className="text-[11px] font-mono text-slate-500 mt-1">
+                    {company.currencySymbol}{filingPrice} ➔ {company.currencySymbol}{company.currentStockPrice}
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-xl bg-slate-950 border border-emerald-900/40">
+                  <span className="text-[11px] text-emerald-400">2. FY2025 真实基本面扩张贡献 (业绩兑现)</span>
+                  <div className="text-2xl font-black font-mono text-emerald-400 mt-1">
+                    +{fundamentalExpansionPct.toFixed(1)}%
+                  </div>
+                  <div className="text-[11px] font-mono text-slate-500 mt-1">
+                    营收从 {company.currencySymbol}{formatNumber(fy24Revenue)}M 增至 {company.currencySymbol}{formatNumber(fy25Revenue)}M
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-xl bg-slate-950 border border-amber-900/40">
+                  <span className="text-[11px] text-amber-400">3. 估值倍数与远期预期变动 (拔估值/杀估值)</span>
+                  <div className={`text-2xl font-black font-mono mt-1 ${multipleShiftPct > 15 ? 'text-rose-400' : 'text-amber-300'}`}>
+                    {multipleShiftPct >= 0 ? '+' : ''}{multipleShiftPct.toFixed(1)}%
+                  </div>
+                  <div className="text-[11px] text-slate-500 mt-1">
+                    {multipleShiftPct <= 0
+                      ? '业绩增速超过股价涨幅，动态估值反而被消化便宜了！'
+                      : '股价涨幅高于当期业绩增速，市场计入了更高远期预期。'}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* 2. 12-Quarter Historical Implied Expectations vs. Realized Growth Backtest Trajectory */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-2 pb-3 border-b border-slate-800">
+                <div className="flex items-center gap-2">
+                  <History className="w-5 h-5 text-cyan-400" />
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-100">
+                      12季度历史隐含预期 vs. 实际业绩兑现回测轨迹 (2023Q1 - 2025Q4 预期剪刀差)
+                    </h3>
+                    <p className="text-[11px] text-slate-400">
+                      回溯过去 12 个季度末股价所隐含的 5 年 CAGR 要求（黄线），对比随后实际兑现的年化增速（青色柱），识别历史上的黄金低估买点与情绪过热区。
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3 text-[11px] font-mono">
+                  <span className="flex items-center gap-1 text-emerald-400">
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span> 黄金买点 (实际兑现 &gt; 隐含预期)
+                  </span>
+                  <span className="flex items-center gap-1 text-rose-400">
+                    <span className="w-2.5 h-2.5 rounded-full bg-rose-500"></span> 预期过热 (隐含预期 &gt; 实际兑现)
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-2.5">
+                {backtestPoints.map((pt) => {
+                  const isGolden = pt.regime === 'golden-buy';
+                  const isOverheated = pt.regime === 'overheated';
+                  return (
+                    <div
+                      key={pt.period}
+                      className={`p-3 rounded-xl border font-mono text-xs space-y-1.5 ${
+                        isGolden
+                          ? 'bg-emerald-950/25 border-emerald-800/50'
+                          : isOverheated
+                          ? 'bg-rose-950/25 border-rose-800/50'
+                          : 'bg-slate-950 border-slate-800'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-slate-200">{pt.period}</span>
+                        <span
+                          className={`text-[9px] px-1.5 py-0.2 rounded font-sans font-bold ${
+                            isGolden
+                              ? 'bg-emerald-900/70 text-emerald-300'
+                              : isOverheated
+                              ? 'bg-rose-900/70 text-rose-300'
+                              : 'bg-slate-800 text-slate-300'
+                          }`}
+                        >
+                          {isGolden ? '黄金买点' : isOverheated ? '预期过热' : '定价均衡'}
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-slate-400">
+                        当时股价: <strong className="text-slate-200">{company.currencySymbol}{pt.stockPriceAtPeriod}</strong>
+                      </div>
+                      <div className="space-y-0.5 text-[10px] pt-1 border-t border-slate-800/80">
+                        <div className="flex justify-between">
+                          <span className="text-slate-400">隐含5Y增速:</span>
+                          <span className="text-amber-300 font-bold">{(pt.impliedCagr5Y * 100).toFixed(1)}%</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-slate-400">实际兑现:</span>
+                          <span className="text-cyan-300 font-bold">{(pt.realizedForwardGrowth * 100).toFixed(1)}%</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-slate-400">预期剪刀差:</span>
+                          <span className={pt.sentimentGap >= 0 ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
+                            {pt.sentimentGap >= 0 ? '+' : ''}{(pt.sentimentGap * 100).toFixed(1)}%
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Pre-Mortem & Kill Conditions Card */}
       <div className="bg-slate-900 border border-rose-900/40 rounded-2xl p-5 shadow-xl">

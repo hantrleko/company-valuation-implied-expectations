@@ -1,4 +1,35 @@
 export type IndustryId = 'ev-mobility' | 'semiconductors';
+export type BasePeriodMode = '2024-FY' | '2025-FY';
+
+export interface SegmentDriver {
+  id: string;
+  name: string;
+  category: 'core' | 'growth-curve' | 'software-ecosystem';
+  revenueShare2024: number; // e.g. 0.78 (78%)
+  revenueShare2025: number; // e.g. 0.85 (85%)
+  grossMargin: number; // e.g. 0.78 (78%)
+  expectedCagr5Y: number; // e.g. 0.30 (30%)
+  targetEvSalesMultiple: number; // e.g. 18.0
+  description: string;
+}
+
+export interface CapmWaccConfig {
+  riskFreeBenchmark: 'US10Y' | 'CN10Y';
+  riskFreeRate: number; // e.g. 0.0425 (4.25%)
+  equityRiskPremium: number; // e.g. 0.048 (4.8%)
+  leveredBeta: number; // e.g. 1.65
+  preTaxCostOfDebt: number; // e.g. 0.052
+  debtToCapitalWeight: number; // e.g. 0.04
+}
+
+export interface ExpectationBacktestPoint {
+  period: string;
+  stockPriceAtPeriod: number;
+  impliedCagr5Y: number; // Market-implied 5Y CAGR at that quarter end
+  realizedForwardGrowth: number; // Actual subsequent annualized growth delivered
+  sentimentGap: number; // Realized - Implied
+  regime: 'golden-buy' | 'neutral' | 'overheated';
+}
 
 export interface DisclosureSource {
   filingType: '10-K' | '10-Q' | '20-F' | '6-K' | 'A股年度报告' | 'A股半年度报告' | 'A股季度报告' | '港股业绩公告';

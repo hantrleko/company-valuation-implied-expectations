@@ -154,4 +154,42 @@ test('DCF & Reverse DCF v3.0 Solver Unit Tests', async (t) => {
     const capYears = solveImpliedCapYears(targetEV, baseNopat, baseIc, wacc);
     assert.ok(capYears >= 1 && capYears <= 25, `CAP Years out of reasonable bound: ${capYears}`);
   });
+
+  await t.test('V4.0 CAPM WACC Macro Rate Penetration & Rate Shock Propagation', () => {
+    const cfg = {
+      riskFreeRate: 0.0425,
+      equityRiskPremium: 0.045,
+      leveredBeta: 1.65,
+      preTaxCostOfDebt: 0.046,
+      debtToCapitalWeight: 0.01
+    };
+    const taxRate = 0.14;
+    const ke = cfg.riskFreeRate + cfg.leveredBeta * cfg.equityRiskPremium;
+    const kdAfterTax = cfg.preTaxCostOfDebt * (1 - taxRate);
+    const waccBase = (1 - cfg.debtToCapitalWeight) * ke + cfg.debtToCapitalWeight * kdAfterTax;
+
+    // +50bps macro rate hike increases WACC and lowers DCF Fair Value
+    const keHike = (cfg.riskFreeRate + 0.005) + cfg.leveredBeta * cfg.equityRiskPremium;
+    const waccHike = (1 - cfg.debtToCapitalWeight) * keHike + cfg.debtToCapitalWeight * kdAfterTax;
+    assert.ok(waccHike > waccBase, 'Rate hike must increase WACC');
+
+    const valBase = calculateForwardDCF(baseDeliveries, baseAsp, baseRevenue, { ...testInputs, wacc: waccBase }, netDebt, sharesOutstanding, currentPrice);
+    const valHike = calculateForwardDCF(baseDeliveries, baseAsp, baseRevenue, { ...testInputs, wacc: waccHike }, netDebt, sharesOutstanding, currentPrice);
+    assert.ok(valBase.valuePerShare > valHike.valuePerShare, 'Higher WACC must reduce DCF fair value per share');
+  });
+
+  await t.test('V4.0 Multi-Segment Mix-Shift Blended Margin & 2D Time-Machine Attribution', () => {
+    const segments = [
+      { revenueShare2025: 0.735, grossMargin: 0.180, expectedCagr5Y: 0.14 },
+      { revenueShare2025: 0.155, grossMargin: 0.305, expectedCagr5Y: 0.42 },
+      { revenueShare2025: 0.110, grossMargin: 0.680, expectedCagr5Y: 0.48 }
+    ];
+    const currentBlendedMargin = segments.reduce((acc, s) => acc + s.grossMargin * s.revenueShare2025, 0);
+    const y5Revs = segments.map(s => s.revenueShare2025 * Math.pow(1 + s.expectedCagr5Y, 5));
+    const totalY5 = y5Revs.reduce((acc, v) => acc + v, 0);
+    const y5Shares = y5Revs.map(r => r / totalY5);
+    const y5BlendedMargin = segments.reduce((acc, s, i) => acc + s.grossMargin * y5Shares[i], 0);
+
+    assert.ok(y5BlendedMargin > currentBlendedMargin, 'High-margin second/third curves growing faster must expand blended gross margin');
+  });
 });

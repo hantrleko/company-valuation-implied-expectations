@@ -1,16 +1,18 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Company, ForecastInputs, DisclosureSource, IndustryId, AccountingOptions } from './types/financial';
+import { Company, ForecastInputs, DisclosureSource, IndustryId, AccountingOptions, BasePeriodMode } from './types/financial';
 import { COMPANIES } from './data/companies';
 import { HISTORICAL_DATA } from './data/historicalData';
 import { ALL_RESEARCH_MEMOS } from './data/researchMemos';
 import { calculateForwardDCF, solveImpliedGrowthRate, solveImpliedGrossMargin, solveImpliedCapYears } from './utils/dcfSolver';
 import { fetchLiveQuotes, LiveQuoteItem, LATEST_MARKET_SNAPSHOT, FILING_BENCHMARK_PRICES } from './utils/liveQuoteService';
+import { buildScenarioDeepLinkUrl, generateDynamicIcBriefMarkdown, downloadDynamicIcBrief } from './utils/icReportExporter';
 import { Navbar } from './components/Navbar';
 import { StageNavigator, StageId } from './components/StageNavigator';
 import { LiveValuationHud } from './components/LiveValuationHud';
 import { QuickSandboxDrawer } from './components/QuickSandboxDrawer';
 import { CommandPaletteModal } from './components/CommandPaletteModal';
 import { DisclosureDrawer } from './components/DisclosureDrawer';
+import { PeerDuelModal } from './components/PeerDuelModal';
 import { RawDisclosuresStage } from './components/stages/RawDisclosuresStage';
 import { FinancialReconstructionStage } from './components/stages/FinancialReconstructionStage';
 import { OperatingDriversStage } from './components/stages/OperatingDriversStage';
@@ -26,10 +28,14 @@ export const App: React.FC = () => {
   const [isMemoOpen, setIsMemoOpen] = useState(false);
   const [isSandboxOpen, setIsSandboxOpen] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+  const [isPeerDuelOpen, setIsPeerDuelOpen] = useState(false);
 
-  // Price Time-Machine Mode: 'live' (Latest real-time), 'filing' (10-K benchmark), 'custom' (Arbitrary)
+  // 2D Time-Machine Dimension A: Price Mode ('live' | 'filing' | 'custom')
   const [priceMode, setPriceMode] = useState<'live' | 'filing' | 'custom'>('live');
   const [customPrice, setCustomPrice] = useState<number | null>(null);
+
+  // 2D Time-Machine Dimension B: Fundamental Base Period ('2025-FY' | '2024-FY')
+  const [basePeriodMode, setBasePeriodMode] = useState<BasePeriodMode>('2025-FY');
 
   // Live Quotes State
   const [liveQuotes, setLiveQuotes] = useState<Record<string, LiveQuoteItem>>({});
@@ -143,16 +149,24 @@ export const App: React.FC = () => {
     };
   }, [activeCompany, effectiveStockPrice]);
 
-  // Historical quarters for active company
+  // Historical quarters for active company (12 Quarters + 3 Annual Reports: 2023 Q1 - 2025 FY)
   const quarters = useMemo(() => {
     return HISTORICAL_DATA[activeCompany.id] || HISTORICAL_DATA['tsla'];
   }, [activeCompany.id]);
 
-  // Baseline quarter for forward DCF
-  const baseQuarter = useMemo(() => {
-    const fy24 = quarters.find((q) => q.period === '2024-FY');
-    return fy24 || quarters[quarters.length - 1];
+  const fy24Quarter = useMemo(() => {
+    return quarters.find((q) => q.period === '2024-FY') || quarters[0];
   }, [quarters]);
+
+  const fy25Quarter = useMemo(() => {
+    return quarters.find((q) => q.period === '2025-FY') || quarters[quarters.length - 1];
+  }, [quarters]);
+
+  // Baseline quarter for forward DCF according to 2D Time-Machine Base Period Mode
+  const baseQuarter = useMemo(() => {
+    const target = quarters.find((q) => q.period === basePeriodMode);
+    return target || fy25Quarter;
+  }, [quarters, basePeriodMode, fy25Quarter]);
 
   // Tailored Forecast inputs per company
   const defaultInputs = useMemo<Record<string, ForecastInputs>>(() => ({
@@ -400,6 +414,102 @@ export const App: React.FC = () => {
     return ALL_RESEARCH_MEMOS.find((m) => m.companyId === activeCompany.id) || ALL_RESEARCH_MEMOS[0];
   }, [activeCompany.id]);
 
+  // Full Deep-Link URL parsing on load (V4.0 Module 6)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const tickerParam = params.get('ticker');
+    const baseParam = params.get('base') as BasePeriodMode;
+    const priceModeParam = params.get('priceMode') as 'live' | 'filing' | 'custom';
+    const priceParam = params.get('price');
+    const g1Param = params.get('g1');
+    const g2Param = params.get('g2');
+    const gmParam = params.get('gm');
+    const waccParam = params.get('wacc');
+    const rdCapParam = params.get('rdCap');
+
+    let matchedComp = activeCompany;
+    if (tickerParam) {
+      const found = COMPANIES.find(
+        c => c.ticker.toLowerCase().includes(tickerParam.toLowerCase()) || c.id === tickerParam.toLowerCase()
+      );
+      if (found) {
+        matchedComp = found;
+        setActiveCompany(found);
+        setActiveIndustry(found.industryId);
+      }
+    }
+
+    if (baseParam === '2024-FY' || baseParam === '2025-FY') {
+      setBasePeriodMode(baseParam);
+    }
+    if (priceModeParam && ['live', 'filing', 'custom'].includes(priceModeParam)) {
+      setPriceMode(priceModeParam);
+      if (priceModeParam === 'custom' && priceParam) {
+        const parsedP = parseFloat(priceParam);
+        if (!isNaN(parsedP) && parsedP > 0) setCustomPrice(parsedP);
+      }
+    }
+
+    const baseInp = defaultInputs[matchedComp.id] || defaultInputs['tsla'];
+    const customInp: ForecastInputs = { ...baseInp };
+    let hasCustomInp = false;
+
+    if (g1Param && !isNaN(parseFloat(g1Param))) {
+      customInp.volumeGrowthYears1to5 = parseFloat(g1Param);
+      hasCustomInp = true;
+    }
+    if (g2Param && !isNaN(parseFloat(g2Param))) {
+      customInp.volumeGrowthYears6to10 = parseFloat(g2Param);
+      hasCustomInp = true;
+    }
+    if (gmParam && !isNaN(parseFloat(gmParam))) {
+      customInp.targetGrossMargin = parseFloat(gmParam);
+      hasCustomInp = true;
+    }
+    if (waccParam && !isNaN(parseFloat(waccParam))) {
+      customInp.wacc = parseFloat(waccParam);
+      hasCustomInp = true;
+    }
+    if (hasCustomInp || tickerParam) {
+      setInputs(customInp);
+    }
+    if (rdCapParam === '1') {
+      setAccountingOptions(prev => ({ ...prev, capitalizeRD: true }));
+    }
+  }, [defaultInputs]);
+
+  const handleCopyDeepLink = () => {
+    const url = buildScenarioDeepLinkUrl(
+      effectiveCompany,
+      basePeriodMode,
+      priceMode,
+      effectiveCompany.currentStockPrice,
+      inputs,
+      accountingOptions
+    );
+    window.history.replaceState({}, '', url);
+    navigator.clipboard.writeText(url);
+  };
+
+  const handleExportIcBrief = () => {
+    const md = generateDynamicIcBriefMarkdown({
+      company: effectiveCompany,
+      basePeriodMode,
+      baseQuarter,
+      fy24Quarter,
+      fy25Quarter,
+      priceMode,
+      inputs,
+      accountingOptions,
+      valuation,
+      impliedGrowth,
+      impliedMargin,
+      impliedCapYears: micap.capYears,
+      memo: activeMemo
+    });
+    downloadDynamicIcBrief(`[Eugene_IC投决简报]_${effectiveCompany.ticker}_${basePeriodMode}_V4.0.md`, md);
+  };
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-cyan-500/30 selection:text-cyan-200 bg-grid-pattern">
       {/* 1. Navbar */}
@@ -410,6 +520,7 @@ export const App: React.FC = () => {
         onSelectCompany={handleSelectCompany}
         onOpenMemos={() => setIsMemoOpen(true)}
         onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
+        onOpenPeerDuel={() => setIsPeerDuelOpen(true)}
         liveQuotes={liveQuotes}
       />
 
@@ -419,7 +530,7 @@ export const App: React.FC = () => {
         onSelectStage={setCurrentStage}
       />
 
-      {/* 3. Global Live Valuation & Expectation Telemetry HUD with Price Time-Machine */}
+      {/* 3. Global Live Valuation & Expectation Telemetry HUD with 2D Time-Machine */}
       <LiveValuationHud
         company={effectiveCompany}
         valuation={valuation}
@@ -432,6 +543,12 @@ export const App: React.FC = () => {
         isSandboxOpen={isSandboxOpen}
         activePriceMode={priceMode}
         onSelectPriceMode={handleSelectPriceMode}
+        basePeriodMode={basePeriodMode}
+        onSelectBasePeriodMode={setBasePeriodMode}
+        fy24Revenue={fy24Quarter.totalRevenue.value}
+        fy25Revenue={fy25Quarter.totalRevenue.value}
+        onCopyDeepLink={handleCopyDeepLink}
+        onExportIcBrief={handleExportIcBrief}
         liveQuoteTimestamp={quoteTimestamp}
         isLiveConnected={isLiveConnected}
       />
@@ -460,6 +577,9 @@ export const App: React.FC = () => {
             company={effectiveCompany}
             quarters={quarters}
             onSelectCompany={handleSelectCompany}
+            inputs={inputs}
+            onChangeInputs={setInputs}
+            onOpenPeerDuel={() => setIsPeerDuelOpen(true)}
           />
         )}
 
@@ -495,6 +615,10 @@ export const App: React.FC = () => {
             memo={activeMemo}
             onOpenMemo={() => setIsMemoOpen(true)}
             onChangeInputs={setInputs}
+            basePeriodMode={basePeriodMode}
+            fy24Revenue={fy24Quarter.totalRevenue.value}
+            fy25Revenue={fy25Quarter.totalRevenue.value}
+            onOpenPeerDuel={() => setIsPeerDuelOpen(true)}
           />
         )}
       </main>
@@ -535,7 +659,7 @@ export const App: React.FC = () => {
         disclosure={inspectedMetric.disclosure}
       />
 
-      {/* 8. Institutional Research Memo & Forecast Ledger Modal */}
+      {/* 8. Institutional Research Memo & 2025 Auto-Reconciled Forecast Ledger Modal */}
       <ResearchMemoModal
         isOpen={isMemoOpen}
         onClose={() => setIsMemoOpen(false)}
@@ -544,20 +668,31 @@ export const App: React.FC = () => {
           const comp = COMPANIES.find((c) => c.id === cid);
           if (comp) handleSelectCompany(comp);
         }}
+        onExportIcBrief={handleExportIcBrief}
       />
 
-      {/* 9. Footer */}
+      {/* 9. V4.0 Head-to-Head Peer Valuation & Implied Expectation Duel Modal */}
+      <PeerDuelModal
+        isOpen={isPeerDuelOpen}
+        onClose={() => setIsPeerDuelOpen(false)}
+        initialCompanyA={effectiveCompany}
+        defaultInputsMap={defaultInputs}
+        liveQuotes={liveQuotes}
+        onSelectCompanyInLab={handleSelectCompany}
+      />
+
+      {/* 10. Footer */}
       <footer className="border-t border-slate-900 bg-slate-950 py-6 text-slate-500 text-xs">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-2">
             <span className="font-bold text-slate-400">Eugene Finance</span>
             <span>·</span>
-            <span>公司经营、估值与市场隐含预期实验室 (v3.2 实时行情与最新财报版)</span>
+            <span>公司经营、估值与市场隐含预期实验室 (v4.0 二维财报时空、多业务SOTP与同业预期差对决版)</span>
           </div>
           <div className="flex items-center gap-4 text-[11px] font-mono">
-            <span>SEC EDGAR XBRL (Live)</span>
-            <span>腾讯财经全市场实时行情</span>
-            <span>Michael Mauboussin 预期投资学</span>
+            <span>SEC EDGAR XBRL (2023Q1-2025FY)</span>
+            <span>二维时空归因 & SOTP分部估值</span>
+            <span>CAPM宏观利率联动 & 双雄对决</span>
           </div>
         </div>
       </footer>

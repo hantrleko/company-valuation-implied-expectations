@@ -2,7 +2,7 @@ import React from 'react';
 import { Company, IndustryId } from '../types/financial';
 import { COMPANIES } from '../data/companies';
 import { formatCurrency } from '../utils/formatters';
-import { BookOpen, Activity, Cpu, Car, Search, Command, Radio } from 'lucide-react';
+import { BookOpen, Activity, Cpu, Car, Search, Radio, Swords } from 'lucide-react';
 import { LiveQuoteItem } from '../utils/liveQuoteService';
 
 interface NavbarProps {
@@ -12,6 +12,7 @@ interface NavbarProps {
   onSelectCompany: (company: Company) => void;
   onOpenMemos: () => void;
   onOpenCommandPalette: () => void;
+  onOpenPeerDuel?: () => void;
   liveQuotes?: Record<string, LiveQuoteItem>;
 }
 
@@ -22,6 +23,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onSelectCompany,
   onOpenMemos,
   onOpenCommandPalette,
+  onOpenPeerDuel,
   liveQuotes = {}
 }) => {
   const currentIndustryCompanies = COMPANIES.filter((c) => c.industryId === activeIndustry);
@@ -40,7 +42,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 Eugene Finance ｜ 02 公司与产业
               </span>
               <span className="text-[10px] px-2 py-0.2 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-700/60 font-mono font-bold flex items-center gap-1">
-                <Radio className="w-2.5 h-2.5 animate-pulse text-emerald-400" /> v3.2 实时行情与财报版
+                <Radio className="w-2.5 h-2.5 animate-pulse text-emerald-400" /> v4.0 二维时空与机构投决版
               </span>
             </div>
             <h1 className="text-xs sm:text-sm font-bold text-slate-100 flex items-center gap-1.5">
@@ -116,8 +118,8 @@ export const Navbar: React.FC<NavbarProps> = ({
           })}
         </div>
 
-        {/* Actions: Command Palette & Research Memos */}
-        <div className="flex items-center gap-2">
+        {/* Actions: Command Palette, Peer Duel & Research Memos */}
+        <div className="flex items-center gap-1.5">
           <button
             onClick={onOpenCommandPalette}
             className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-950 hover:bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-800 text-xs font-mono transition-colors"
@@ -129,12 +131,23 @@ export const Navbar: React.FC<NavbarProps> = ({
             </kbd>
           </button>
 
+          {onOpenPeerDuel && (
+            <button
+              onClick={onOpenPeerDuel}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-amber-950/70 hover:bg-amber-900/80 text-amber-300 border border-amber-700/60 text-xs font-semibold transition-colors shadow-sm"
+              title="打开双雄同台基本面与市场隐含预期对决竞技场"
+            >
+              <Swords className="w-3.5 h-3.5 text-amber-400" />
+              <span>双雄对决</span>
+            </button>
+          )}
+
           <button
             onClick={onOpenMemos}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan-950/80 hover:bg-cyan-900/80 text-cyan-300 border border-cyan-800/60 text-xs font-semibold transition-colors shadow-sm"
           >
             <BookOpen className="w-3.5 h-3.5" />
-            <span>10 份研报与对账本</span>
+            <span>10份研报与2025对账</span>
           </button>
         </div>
       </div>
