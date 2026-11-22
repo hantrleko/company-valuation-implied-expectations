@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
-import { Company, ForecastInputs, ValuationOutput, CapmWaccConfig } from '../../types/financial';
-import { COMPANY_CAPM_CONFIGS, computeWaccFromCapm } from '../../data/v4InstitutionalData';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { Company, ForecastInputs, ValuationOutput, CapmWaccConfig, SegmentDriver } from '../../types/financial';
+import { COMPANY_CAPM_CONFIGS, computeWaccFromCapm, COMPANY_SEGMENTS } from '../../data/v4InstitutionalData';
 import { formatNumber, formatCurrency, formatPercent } from '../../utils/formatters';
-import { Sliders, RotateCcw, TrendingUp, ShieldAlert, Sparkles, PieChart, Layers, Target, Landmark, Zap } from 'lucide-react';
+import { Sliders, RotateCcw, TrendingUp, PieChart, Layers, Landmark, Zap, Check } from 'lucide-react';
 
 interface ScenarioForecastingStageProps {
   company: Company;
@@ -10,6 +10,144 @@ interface ScenarioForecastingStageProps {
   valuation: ValuationOutput;
   onChangeInputs: (newInputs: ForecastInputs) => void;
   onApplyPreset: (preset: 'bull' | 'base' | 'bear' | 'consensus') => void;
+}
+
+const CURVE_META: Record<SegmentDriver['category'], {
+  label: string;
+  badgeClass: string;
+  accentClass: string;
+  textClass: string;
+  rowBorderClass: string;
+}> = {
+  core: {
+    label: '第一曲线核心基本盘',
+    badgeClass: 'bg-cyan-950/90 text-cyan-300 border-cyan-800/60',
+    accentClass: 'accent-cyan-500',
+    textClass: 'text-cyan-300',
+    rowBorderClass: 'border-l-2 border-l-cyan-500/80'
+  },
+  'growth-curve': {
+    label: '第二曲线高增业务',
+    badgeClass: 'bg-amber-950/90 text-amber-300 border-amber-800/60',
+    accentClass: 'accent-amber-500',
+    textClass: 'text-amber-300',
+    rowBorderClass: 'border-l-2 border-l-amber-500/80'
+  },
+  'software-ecosystem': {
+    label: '第三曲线高毛利软件/服务',
+    badgeClass: 'bg-purple-950/90 text-purple-300 border-purple-800/60',
+    accentClass: 'accent-purple-500',
+    textClass: 'text-purple-300',
+    rowBorderClass: 'border-l-2 border-l-purple-500/80'
+  }
+};
+
+interface SegmentSynthesis {
+  blendedCagr5Y: number;
+  blendedMarginYear5: number;
+  currentBlendedMargin: number;
+  year5Shares: number[];
+}
+
+function computeSegmentSynthesis(segments: SegmentDriver[]): SegmentSynthesis {
+  if (!segments.length) {
+    return {
+      blendedCagr5Y: 0.18,
+      blendedMarginYear5: 0.25,
+      currentBlendedMargin: 0.25,
+      year5Shares: []
+    };
+  }
+  const totalShare2025 = segments.reduce((acc, s) => acc + s.revenueShare2025, 0) || 1;
+  const year5Weights = segments.map((s) => s.revenueShare2025 * Math.pow(1 + s.expectedCagr5Y, 5));
+  const totalYear5Weight = year5Weights.reduce((acc, w) => acc + w, 0) || 1;
+  const blendedCagr5Y = Math.pow(totalYear5Weight / totalShare2025, 1 / 5) - 1;
+  const year5Shares = year5Weights.map((w) => w / totalYear5Weight);
+  const blendedMarginYear5 = segments.reduce((acc, s, idx) => acc + s.grossMargin * year5Shares[idx], 0);
+  const currentBlendedMargin = segments.reduce(
+    (acc, s) => acc + s.grossMargin * (s.revenueShare2025 / totalShare2025),
+    0
+  );
+
+  return {
+    blendedCagr5Y: Number(blendedCagr5Y.toFixed(4)),
+    blendedMarginYear5: Number(blendedMarginYear5.toFixed(4)),
+    currentBlendedMargin: Number(currentBlendedMargin.toFixed(4)),
+    year5Shares
+  };
+}
+
+interface YearSegmentProjection {
+  year: number;
+  shares: number[];
+  revenues: number[];
+  grossProfits: number[];
+  grossProfitShares: number[];
+  totalSegmentGrossProfit: number;
+  blendedGrossMargin: number;
+  expansionCurveGpShare: number;
+}
+
+function computeTenYearSegmentProjections(
+  segments: SegmentDriver[],
+  forecastYears: ValuationOutput['forecastYears'],
+  terminalGrowthRate: number
+): YearSegmentProjection[] {
+  if (!segments.length || !forecastYears.length) return [];
+
+  const anchorRate = Math.min(Math.max(terminalGrowthRate, 0.015), 0.06);
+  const runningWeights = segments.map((s) => Math.max(s.revenueShare2025, 0));
+
+  return forecastYears.map((yr) => {
+    // Y1-Y5 compound at each curve's 5Y CAGR; Y6-Y10 smoothly decelerate toward terminal anchor
+    const fadeMultiplier = yr.year <= 5 ? 1 : Math.pow(0.72, yr.year - 5);
+    for (let i = 0; i < segments.length; i++) {
+      const segRate =
+        yr.year <= 5
+          ? segments[i].expectedCagr5Y
+          : anchorRate + (segments[i].expectedCagr5Y - anchorRate) * fadeMultiplier;
+      runningWeights[i] *= Math.max(1 + segRate, 0.01);
+    }
+
+    const totalWeight = runningWeights.reduce((sum, w) => sum + w, 0) || 1;
+    const shares = runningWeights.map((w) => w / totalWeight);
+
+    // Normalize integer segment revenues to match yr.revenue exactly
+    const revenues = shares.map((share) => Math.round(yr.revenue * share));
+    const residual = yr.revenue - revenues.reduce((sum, r) => sum + r, 0);
+    if (residual !== 0 && revenues.length > 0) {
+      let maxIdx = 0;
+      for (let i = 1; i < shares.length; i++) {
+        if (shares[i] > shares[maxIdx]) maxIdx = i;
+      }
+      revenues[maxIdx] += residual;
+    }
+
+    const grossProfits = revenues.map((rev, idx) => Math.round(rev * segments[idx].grossMargin));
+    const totalSegmentGrossProfit = grossProfits.reduce((sum, gp) => sum + gp, 0);
+    const grossProfitShares = grossProfits.map((gp) =>
+      totalSegmentGrossProfit > 0 ? gp / totalSegmentGrossProfit : 0
+    );
+    const blendedGrossMargin = yr.revenue > 0 ? totalSegmentGrossProfit / yr.revenue : 0;
+    const expansionCurveGpShare =
+      totalSegmentGrossProfit > 0
+        ? grossProfits.reduce(
+            (sum, gp, idx) => (segments[idx].category !== 'core' ? sum + gp : sum),
+            0
+          ) / totalSegmentGrossProfit
+        : 0;
+
+    return {
+      year: yr.year,
+      shares,
+      revenues,
+      grossProfits,
+      grossProfitShares,
+      totalSegmentGrossProfit,
+      blendedGrossMargin,
+      expansionCurveGpShare
+    };
+  });
 }
 
 export const ScenarioForecastingStage: React.FC<ScenarioForecastingStageProps> = ({
@@ -20,10 +158,91 @@ export const ScenarioForecastingStage: React.FC<ScenarioForecastingStageProps> =
   onApplyPreset
 }) => {
   const [capmConfig, setCapmConfig] = useState<CapmWaccConfig>(() => COMPANY_CAPM_CONFIGS[company.id] || COMPANY_CAPM_CONFIGS['nvda']);
+  const [segments, setSegments] = useState<SegmentDriver[]>(() => COMPANY_SEGMENTS[company.id] || []);
+  const [showSegmentBreakdown, setShowSegmentBreakdown] = useState<boolean>(true);
+  const [autoSyncDcf, setAutoSyncDcf] = useState<boolean>(true);
+  const [syncToast, setSyncToast] = useState<boolean>(false);
+  const syncTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     setCapmConfig(COMPANY_CAPM_CONFIGS[company.id] || COMPANY_CAPM_CONFIGS['nvda']);
+    setSegments(COMPANY_SEGMENTS[company.id] || []);
+    setSyncToast(false);
   }, [company.id]);
+
+  useEffect(() => {
+    return () => {
+      if (syncTimerRef.current !== null) {
+        window.clearTimeout(syncTimerRef.current);
+      }
+    };
+  }, []);
+
+  const segmentSynthesis = useMemo(() => computeSegmentSynthesis(segments), [segments]);
+  const segmentProjections = useMemo(
+    () => computeTenYearSegmentProjections(segments, valuation.forecastYears, inputs.terminalGrowthRate),
+    [segments, valuation.forecastYears, inputs.terminalGrowthRate]
+  );
+
+  const flashSyncedToast = () => {
+    setSyncToast(true);
+    if (syncTimerRef.current !== null) {
+      window.clearTimeout(syncTimerRef.current);
+    }
+    syncTimerRef.current = window.setTimeout(() => setSyncToast(false), 2000);
+  };
+
+  const syncSynthesisToDcf = (synthesis: SegmentSynthesis, showFeedback = false) => {
+    onChangeInputs({
+      ...inputs,
+      volumeGrowthYears1to5: synthesis.blendedCagr5Y,
+      targetGrossMargin: synthesis.blendedMarginYear5
+    });
+    if (showFeedback) {
+      flashSyncedToast();
+    }
+  };
+
+  const handleSegmentFieldChange = (
+    segIdx: number,
+    field: 'expectedCagr5Y' | 'grossMargin',
+    value: number
+  ) => {
+    const nextSegments = segments.map((seg, idx) =>
+      idx === segIdx ? { ...seg, [field]: value } : seg
+    );
+    setSegments(nextSegments);
+    if (autoSyncDcf) {
+      syncSynthesisToDcf(computeSegmentSynthesis(nextSegments));
+    }
+  };
+
+  const handleToggleAutoSync = () => {
+    const nextAuto = !autoSyncDcf;
+    setAutoSyncDcf(nextAuto);
+    if (nextAuto) {
+      syncSynthesisToDcf(segmentSynthesis, true);
+    }
+  };
+
+  const handleResetSegments = () => {
+    const defaults = COMPANY_SEGMENTS[company.id] || [];
+    setSegments(defaults);
+    if (autoSyncDcf) {
+      syncSynthesisToDcf(computeSegmentSynthesis(defaults), true);
+    }
+  };
+
+  const isDcfAlignedWithMix =
+    Math.abs(inputs.volumeGrowthYears1to5 - segmentSynthesis.blendedCagr5Y) < 0.001 &&
+    Math.abs(inputs.targetGrossMargin - segmentSynthesis.blendedMarginYear5) < 0.001;
+
+  const y1Projection = segmentProjections[0];
+  const y10Projection = segmentProjections[segmentProjections.length - 1];
+  const marginExpansionBps =
+    y1Projection && y10Projection
+      ? Math.round((y10Projection.blendedGrossMargin - y1Projection.blendedGrossMargin) * 10000)
+      : 0;
 
   const capmDerived = computeWaccFromCapm(capmConfig, inputs.taxRate);
 
@@ -76,6 +295,54 @@ export const ScenarioForecastingStage: React.FC<ScenarioForecastingStageProps> =
 
   // Trajectory bar calculations for 10-year FCFF
   const maxFcff = Math.max(...valuation.forecastYears.map(y => Math.abs(y.fcff)), 1);
+
+  const renderSegmentRows = (metric: 'revenue' | 'grossProfit') => {
+    const isRevenue = metric === 'revenue';
+    return segments.map((seg, segIdx) => {
+      const meta = CURVE_META[seg.category];
+      return (
+        <tr
+          key={`${metric}-${seg.id}`}
+          className="bg-slate-950/60 hover:bg-slate-800/40 text-[11px] transition-colors"
+        >
+          <td className={`py-2 px-4 font-sans sticky left-0 bg-slate-950 z-10 ${meta.rowBorderClass}`}>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${meta.badgeClass}`}>
+                {meta.label}
+              </span>
+              <span className="text-[10px] font-mono text-slate-400">
+                {isRevenue ? '营收' : '毛利'}
+              </span>
+            </div>
+            <div className="flex items-center justify-between gap-2 mt-0.5 text-[10px] text-slate-400">
+              <span className="truncate max-w-[165px]" title={seg.name}>
+                {seg.name}
+              </span>
+              <span className="font-mono text-slate-500 flex-shrink-0">
+                {isRevenue
+                  ? `CAGR ${(seg.expectedCagr5Y * 100).toFixed(0)}%`
+                  : `GM ${(seg.grossMargin * 100).toFixed(1)}%`}
+              </span>
+            </div>
+          </td>
+          {segmentProjections.map((proj) => {
+            const val = isRevenue ? proj.revenues[segIdx] : proj.grossProfits[segIdx];
+            const share = isRevenue ? proj.shares[segIdx] : proj.grossProfitShares[segIdx];
+            return (
+              <td key={`${metric}-${seg.id}-${proj.year}`} className="py-2 px-3 text-right">
+                <div className={`font-semibold ${isRevenue ? meta.textClass : 'text-emerald-300/90'}`}>
+                  {formatNumber(val)}
+                </div>
+                <div className="text-[10px] text-slate-500">
+                  {formatPercent(share, 1)} {isRevenue ? '占比' : '贡献'}
+                </div>
+              </td>
+            );
+          })}
+        </tr>
+      );
+    });
+  };
 
   return (
     <div className="space-y-6 animate-fadeIn">
@@ -524,14 +791,171 @@ export const ScenarioForecastingStage: React.FC<ScenarioForecastingStageProps> =
         </div>
       </div>
 
+      {/* Compact Inline Multi-Segment Curve Growth & Blended Margin Tuner */}
+      {segments.length > 0 && (
+        <div className="bg-slate-900 border border-cyan-800/40 rounded-2xl p-4 shadow-xl space-y-3">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <Layers className="w-4 h-4 text-cyan-400" />
+                <h3 className="text-sm font-bold text-slate-100">三大业务曲线增速与混合毛利快调</h3>
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-950 text-slate-400 border border-slate-800">
+                  Y1-Y5 曲线增速 · Y6-Y10 平滑收敛 · 实时映射下方 10 年明细
+                </span>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono">
+              <span className="px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-slate-300">
+                合成 5Y CAGR: <strong className="text-cyan-300">{(segmentSynthesis.blendedCagr5Y * 100).toFixed(1)}%</strong>
+              </span>
+              <span className="px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-slate-300">
+                Y5 混合毛利: <strong className="text-emerald-400">{(segmentSynthesis.blendedMarginYear5 * 100).toFixed(1)}%</strong>
+              </span>
+              {y1Projection && y10Projection && (
+                <span className="px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-slate-300">
+                  10年毛利扩张: <strong className="text-amber-300">{formatPercent(y1Projection.blendedGrossMargin)} → {formatPercent(y10Projection.blendedGrossMargin)}</strong>{' '}
+                  <span className={marginExpansionBps >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
+                    ({marginExpansionBps >= 0 ? '+' : ''}{marginExpansionBps}bps)
+                  </span>
+                </span>
+              )}
+
+              <button
+                type="button"
+                onClick={handleToggleAutoSync}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border font-sans font-medium transition-colors ${
+                  autoSyncDcf
+                    ? 'bg-emerald-950/70 text-emerald-300 border-emerald-700/60 hover:bg-emerald-900/70'
+                    : 'bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700'
+                }`}
+              >
+                <span className={`w-1.5 h-1.5 rounded-full ${autoSyncDcf ? 'bg-emerald-400' : 'bg-slate-500'}`} />
+                <span>{autoSyncDcf ? '实时联动 DCF: 开启' : '实时联动 DCF: 关闭'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => syncSynthesisToDcf(segmentSynthesis, true)}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded-lg font-sans font-bold transition-all ${
+                  syncToast
+                    ? 'bg-emerald-600 text-white'
+                    : isDcfAlignedWithMix
+                    ? 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700'
+                    : 'bg-cyan-500 hover:bg-cyan-400 text-slate-950 shadow-md shadow-cyan-500/20'
+                }`}
+              >
+                {syncToast ? <Check className="w-3.5 h-3.5" /> : <Zap className="w-3.5 h-3.5" />}
+                <span>
+                  {syncToast
+                    ? '已同步至 DCF'
+                    : isDcfAlignedWithMix
+                    ? 'DCF 已对齐'
+                    : '同步混合增速/毛利至 DCF'}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleResetSegments}
+                title="恢复默认分部参数"
+                className="flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-slate-200 border border-slate-700 font-sans transition-colors"
+              >
+                <RotateCcw className="w-3 h-3" />
+                <span>重置</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {segments.map((seg, idx) => {
+              const meta = CURVE_META[seg.category];
+              const y5Share = segmentSynthesis.year5Shares[idx] ?? seg.revenueShare2025;
+              const y10Share = y10Projection?.shares[idx] ?? y5Share;
+
+              return (
+                <div key={seg.id} className="p-3 rounded-xl bg-slate-950 border border-slate-800/90 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${meta.badgeClass}`}>
+                      {meta.label}
+                    </span>
+                    <span className="text-[10px] font-mono text-slate-400">
+                      占比 {(seg.revenueShare2025 * 100).toFixed(0)}% → Y5 {(y5Share * 100).toFixed(0)}% → Y10 {(y10Share * 100).toFixed(0)}%
+                    </span>
+                  </div>
+
+                  <div className="text-[11px] font-medium text-slate-200 truncate" title={seg.name}>
+                    {seg.name}
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2.5 pt-1">
+                    <div>
+                      <div className="flex justify-between text-[10px] font-mono mb-1">
+                        <span className="text-slate-400">5Y CAGR</span>
+                        <span className={`font-bold ${meta.textClass}`}>+{(seg.expectedCagr5Y * 100).toFixed(0)}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0}
+                        max={0.65}
+                        step={0.01}
+                        value={seg.expectedCagr5Y}
+                        onChange={(e) => handleSegmentFieldChange(idx, 'expectedCagr5Y', parseFloat(e.target.value))}
+                        className={`w-full h-1 bg-slate-800 rounded-lg cursor-pointer ${meta.accentClass}`}
+                      />
+                    </div>
+
+                    <div>
+                      <div className="flex justify-between text-[10px] font-mono mb-1">
+                        <span className="text-slate-400">分部毛利率</span>
+                        <span className="font-bold text-emerald-400">{(seg.grossMargin * 100).toFixed(1)}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0.05}
+                        max={0.92}
+                        step={0.005}
+                        value={seg.grossMargin}
+                        onChange={(e) => handleSegmentFieldChange(idx, 'grossMargin', parseFloat(e.target.value))}
+                        className="w-full h-1 bg-slate-800 rounded-lg cursor-pointer accent-emerald-500"
+                      />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* 10-Year Projections Table */}
       <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl">
-        <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-850/50">
+        <div className="p-4 border-b border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-3 bg-slate-850/50">
           <div className="flex items-center gap-2 text-xs text-slate-300 font-medium">
             <Sliders className="w-4 h-4 text-cyan-400" />
             <span>未来 10 年财务与现金流情景推演表 (单位：{company.currencySymbol}M)</span>
           </div>
-          <div className="flex items-center gap-4 text-xs font-mono">
+          <div className="flex items-center gap-3 flex-wrap text-xs font-mono">
+            {segments.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowSegmentBreakdown((prev) => !prev)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-sans font-medium border transition-colors ${
+                  showSegmentBreakdown
+                    ? 'bg-cyan-950/70 text-cyan-300 border-cyan-700/70 hover:bg-cyan-900/60'
+                    : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
+                }`}
+              >
+                <span>📊 展开三大业务分部 10年营收与毛利明细</span>
+                <span
+                  className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${
+                    showSegmentBreakdown ? 'bg-cyan-500/20 text-cyan-200' : 'bg-slate-700 text-slate-400'
+                  }`}
+                >
+                  {showSegmentBreakdown ? '已展开' : '已收起'}
+                </span>
+              </button>
+            )}
             <span className="text-slate-400">折现率 (WACC): {formatPercent(inputs.wacc)}</span>
             <span className="text-slate-400">永续增长率 (g): {formatPercent(inputs.terminalGrowthRate)}</span>
           </div>
@@ -541,11 +965,11 @@ export const ScenarioForecastingStage: React.FC<ScenarioForecastingStageProps> =
           <table className="w-full text-xs text-left border-collapse">
             <thead>
               <tr className="bg-slate-950/80 border-b border-slate-800 text-slate-400 font-mono">
-                <th className="py-3 px-4 font-semibold text-slate-300 sticky left-0 bg-slate-950 z-10 w-44">
+                <th className="py-3 px-4 font-semibold text-slate-300 sticky left-0 bg-slate-950 z-10 w-60 min-w-[230px]">
                   预测科目
                 </th>
                 {valuation.forecastYears.map((yr) => (
-                  <th key={yr.year} className="py-3 px-3 text-right whitespace-nowrap min-w-[85px]">
+                  <th key={yr.year} className="py-3 px-3 text-right whitespace-nowrap min-w-[92px]">
                     {yr.calendarYear} (Y{yr.year})
                   </th>
                 ))}
@@ -564,10 +988,21 @@ export const ScenarioForecastingStage: React.FC<ScenarioForecastingStageProps> =
                 ))}
               </tr>
 
+              {/* Segment Revenue Breakdown (Y1-Y10) */}
+              {showSegmentBreakdown &&
+                segments.length > 0 &&
+                segmentProjections.length === valuation.forecastYears.length &&
+                renderSegmentRows('revenue')}
+
               {/* Revenue */}
-              <tr className="hover:bg-slate-800/40 font-semibold text-slate-100">
+              <tr className="bg-slate-900/90 hover:bg-slate-800/40 font-semibold text-slate-100">
                 <td className="py-2.5 px-4 font-sans sticky left-0 bg-slate-900 z-10">
-                  营业收入
+                  <div>营业收入</div>
+                  {showSegmentBreakdown && segments.length > 0 && (
+                    <div className="text-[10px] font-mono font-normal text-cyan-400/80 mt-0.5">
+                      三大分部归一化合计 (100%)
+                    </div>
+                  )}
                 </td>
                 {valuation.forecastYears.map((yr) => (
                   <td key={yr.year} className="py-2.5 px-3 text-right">
@@ -576,16 +1011,43 @@ export const ScenarioForecastingStage: React.FC<ScenarioForecastingStageProps> =
                 ))}
               </tr>
 
+              {/* Segment Gross Profit Breakdown (Y1-Y10) */}
+              {showSegmentBreakdown &&
+                segments.length > 0 &&
+                segmentProjections.length === valuation.forecastYears.length &&
+                renderSegmentRows('grossProfit')}
+
               {/* Gross Profit */}
-              <tr className="hover:bg-slate-800/40">
-                <td className="py-2.5 px-4 font-sans text-slate-300 sticky left-0 bg-slate-900 z-10">
-                  毛利润
+              <tr className="bg-slate-900/90 hover:bg-slate-800/40">
+                <td className="py-2.5 px-4 font-sans text-slate-200 sticky left-0 bg-slate-900 z-10">
+                  <div className="font-semibold">毛利润</div>
+                  {showSegmentBreakdown && y1Projection && y10Projection && (
+                    <div className="text-[10px] font-mono text-slate-400 mt-0.5 space-y-0.5">
+                      <div>
+                        DCF {(inputs.targetGrossMargin * 100).toFixed(1)}% ｜ 混合{' '}
+                        <span className="text-emerald-400">
+                          {formatPercent(y1Projection.blendedGrossMargin)} → {formatPercent(y10Projection.blendedGrossMargin)}
+                        </span>
+                      </div>
+                      <div className="text-purple-300/90">
+                        第2+3曲线毛利占比 {formatPercent(y1Projection.expansionCurveGpShare, 0)} → {formatPercent(y10Projection.expansionCurveGpShare, 0)}
+                      </div>
+                    </div>
+                  )}
                 </td>
-                {valuation.forecastYears.map((yr) => (
-                  <td key={yr.year} className="py-2.5 px-3 text-right text-emerald-400">
-                    {formatNumber(yr.grossProfit)}
-                  </td>
-                ))}
+                {valuation.forecastYears.map((yr, idx) => {
+                  const proj = segmentProjections[idx];
+                  return (
+                    <td key={yr.year} className="py-2.5 px-3 text-right">
+                      <div className="text-emerald-400 font-semibold">{formatNumber(yr.grossProfit)}</div>
+                      {showSegmentBreakdown && proj && (
+                        <div className="text-[10px] text-slate-400 whitespace-nowrap" title={`第2+3曲线贡献 ${formatPercent(proj.expansionCurveGpShare, 1)}`}>
+                          分部 {formatNumber(proj.totalSegmentGrossProfit)} ({formatPercent(proj.blendedGrossMargin)})
+                        </div>
+                      )}
+                    </td>
+                  );
+                })}
               </tr>
 
               {/* NOPAT */}

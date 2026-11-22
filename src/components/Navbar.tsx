@@ -42,7 +42,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 Eugene Finance ｜ 02 公司与产业
               </span>
               <span className="text-[10px] px-2 py-0.2 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-700/60 font-mono font-bold flex items-center gap-1">
-                <Radio className="w-2.5 h-2.5 animate-pulse text-emerald-400" /> v4.0 二维时空与机构投决版
+                <Radio className="w-2.5 h-2.5 animate-pulse text-emerald-400" /> v4.5 个人投研工作台与全链路闭环版
               </span>
             </div>
             <h1 className="text-xs sm:text-sm font-bold text-slate-100 flex items-center gap-1.5">

@@ -1,25 +1,67 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Company, ForecastInputs, DisclosureSource, IndustryId, AccountingOptions, BasePeriodMode } from './types/financial';
+import { Company, ForecastInputs, DisclosureSource, IndustryId, AccountingOptions, BasePeriodMode, ResearchMemo, VerifiableForecast, KillCondition } from './types/financial';
 import { COMPANIES } from './data/companies';
 import { HISTORICAL_DATA } from './data/historicalData';
 import { ALL_RESEARCH_MEMOS } from './data/researchMemos';
 import { calculateForwardDCF, solveImpliedGrowthRate, solveImpliedGrossMargin, solveImpliedCapYears } from './utils/dcfSolver';
 import { fetchLiveQuotes, LiveQuoteItem, LATEST_MARKET_SNAPSHOT, FILING_BENCHMARK_PRICES } from './utils/liveQuoteService';
 import { buildScenarioDeepLinkUrl, generateDynamicIcBriefMarkdown, downloadDynamicIcBrief } from './utils/icReportExporter';
+import { formatNumber } from './utils/formatters';
+import { Zap, RotateCcw, FileSearch } from 'lucide-react';
 import { Navbar } from './components/Navbar';
 import { StageNavigator, StageId } from './components/StageNavigator';
 import { LiveValuationHud } from './components/LiveValuationHud';
+import { ExecutiveVerdictBanner } from './components/ExecutiveVerdictBanner';
 import { QuickSandboxDrawer } from './components/QuickSandboxDrawer';
 import { CommandPaletteModal } from './components/CommandPaletteModal';
 import { DisclosureDrawer } from './components/DisclosureDrawer';
 import { PeerDuelModal } from './components/PeerDuelModal';
-import { RawDisclosuresStage } from './components/stages/RawDisclosuresStage';
+import { RawDisclosuresStage, CustomBaseOverride } from './components/stages/RawDisclosuresStage';
 import { FinancialReconstructionStage } from './components/stages/FinancialReconstructionStage';
 import { OperatingDriversStage } from './components/stages/OperatingDriversStage';
 import { ScenarioForecastingStage } from './components/stages/ScenarioForecastingStage';
 import { ValuationRangeStage } from './components/stages/ValuationRangeStage';
 import { MarketImpliedStage } from './components/stages/MarketImpliedStage';
 import { ResearchMemoModal } from './components/memos/ResearchMemoModal';
+
+const FILING_OVERRIDE_STORAGE_PREFIX = 'user_filing_override_v45_';
+
+function loadFilingOverride(companyId: string): CustomBaseOverride | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(`${FILING_OVERRIDE_STORAGE_PREFIX}${companyId}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    const deliveries = Number(parsed?.deliveries);
+    const asp = Number(parsed?.asp);
+    const totalRevenue = Number(parsed?.totalRevenue);
+    const grossMargin = Number(parsed?.grossMargin);
+    if (
+      parsed &&
+      typeof parsed.periodLabel === 'string' &&
+      Number.isFinite(deliveries) &&
+      deliveries > 0 &&
+      Number.isFinite(asp) &&
+      asp > 0 &&
+      Number.isFinite(totalRevenue) &&
+      totalRevenue > 0 &&
+      Number.isFinite(grossMargin) &&
+      grossMargin >= 0 &&
+      grossMargin <= 100
+    ) {
+      return {
+        periodLabel: parsed.periodLabel,
+        deliveries,
+        asp,
+        totalRevenue,
+        grossMargin
+      };
+    }
+  } catch {
+    // Ignore localStorage read/parse issues
+  }
+  return null;
+}
 
 export const App: React.FC = () => {
   const [activeIndustry, setActiveIndustry] = useState<IndustryId>('ev-mobility');
@@ -36,6 +78,15 @@ export const App: React.FC = () => {
 
   // 2D Time-Machine Dimension B: Fundamental Base Period ('2025-FY' | '2024-FY')
   const [basePeriodMode, setBasePeriodMode] = useState<BasePeriodMode>('2025-FY');
+
+  // V4.5 Live Earnings Flash Base Override (persisted per company)
+  const [customBaseOverride, setCustomBaseOverride] = useState<CustomBaseOverride | null>(() =>
+    loadFilingOverride(COMPANIES[0].id)
+  );
+
+  useEffect(() => {
+    setCustomBaseOverride(loadFilingOverride(activeCompany.id));
+  }, [activeCompany.id]);
 
   // Live Quotes State
   const [liveQuotes, setLiveQuotes] = useState<Record<string, LiveQuoteItem>>({});
@@ -162,11 +213,19 @@ export const App: React.FC = () => {
     return quarters.find((q) => q.period === '2025-FY') || quarters[quarters.length - 1];
   }, [quarters]);
 
-  // Baseline quarter for forward DCF according to 2D Time-Machine Base Period Mode
+  // Baseline quarter for forward DCF according to 2D Time-Machine Base Period Mode (overridden by V4.5 live filing override when active)
   const baseQuarter = useMemo(() => {
-    const target = quarters.find((q) => q.period === basePeriodMode);
-    return target || fy25Quarter;
-  }, [quarters, basePeriodMode, fy25Quarter]);
+    const target = quarters.find((q) => q.period === basePeriodMode) || fy25Quarter;
+    if (!customBaseOverride) return target;
+    return {
+      ...target,
+      periodLabel: customBaseOverride.periodLabel,
+      deliveries: { ...target.deliveries, value: customBaseOverride.deliveries },
+      asp: { ...target.asp, value: customBaseOverride.asp },
+      totalRevenue: { ...target.totalRevenue, value: customBaseOverride.totalRevenue },
+      totalGrossMargin: { ...target.totalGrossMargin, value: customBaseOverride.grossMargin }
+    };
+  }, [quarters, basePeriodMode, fy25Quarter, customBaseOverride]);
 
   // Tailored Forecast inputs per company
   const defaultInputs = useMemo<Record<string, ForecastInputs>>(() => ({
@@ -410,9 +469,96 @@ export const App: React.FC = () => {
     }
   };
 
-  const activeMemo = useMemo(() => {
-    return ALL_RESEARCH_MEMOS.find((m) => m.companyId === activeCompany.id) || ALL_RESEARCH_MEMOS[0];
-  }, [activeCompany.id]);
+  const activeMemo = useMemo<ResearchMemo>(() => {
+    const baseMemo = ALL_RESEARCH_MEMOS.find((m) => m.companyId === activeCompany.id) || ALL_RESEARCH_MEMOS[0];
+    if (typeof window === 'undefined') return baseMemo;
+
+    let nextThesis = baseMemo.thesis;
+    let nextForecasts = baseMemo.verifiableForecasts;
+    let nextKills = baseMemo.killConditions;
+
+    try {
+      const thesisRaw = window.localStorage.getItem(`user_thesis_v45_${baseMemo.companyId}`);
+      if (thesisRaw) {
+        const parsed = JSON.parse(thesisRaw);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          nextThesis = {
+            ...baseMemo.thesis,
+            marketConsensus:
+              typeof parsed.marketConsensus === 'string' && parsed.marketConsensus.trim().length > 0
+                ? parsed.marketConsensus
+                : baseMemo.thesis.marketConsensus,
+            variantPerception:
+              typeof parsed.variantPerception === 'string' && parsed.variantPerception.trim().length > 0
+                ? parsed.variantPerception
+                : baseMemo.thesis.variantPerception
+          };
+        }
+      }
+
+      const forecastsRaw = window.localStorage.getItem(`user_forecasts_v45_${baseMemo.companyId}`);
+      if (forecastsRaw) {
+        const parsedForecasts = JSON.parse(forecastsRaw);
+        if (Array.isArray(parsedForecasts) && parsedForecasts.length > 0) {
+          nextForecasts = [...baseMemo.verifiableForecasts, ...(parsedForecasts as VerifiableForecast[])];
+        }
+      }
+
+      const killsRaw = window.localStorage.getItem(`user_kills_v45_${baseMemo.companyId}`);
+      if (killsRaw) {
+        const parsedKills = JSON.parse(killsRaw);
+        if (Array.isArray(parsedKills) && parsedKills.length > 0) {
+          nextKills = [...baseMemo.killConditions, ...(parsedKills as KillCondition[])];
+        }
+      }
+    } catch {
+      // Ignore localStorage parse errors
+    }
+
+    return {
+      ...baseMemo,
+      thesis: nextThesis,
+      verifiableForecasts: nextForecasts,
+      killConditions: nextKills
+    };
+  }, [activeCompany.id, isMemoOpen]);
+
+  const handleApplyBaseOverride = (override: CustomBaseOverride | null) => {
+    const storageKey = `${FILING_OVERRIDE_STORAGE_PREFIX}${activeCompany.id}`;
+    try {
+      if (override) {
+        window.localStorage.setItem(storageKey, JSON.stringify(override));
+      } else {
+        window.localStorage.removeItem(storageKey);
+      }
+    } catch {
+      // Ignore localStorage write/remove errors
+    }
+
+    if (override) {
+      const prevMarginPct = customBaseOverride
+        ? customBaseOverride.grossMargin
+        : Number(fy25Quarter.totalGrossMargin.value.toFixed(1));
+      if (Math.abs(override.grossMargin - prevMarginPct) > 0.05) {
+        const nextMarginRatio = Number((override.grossMargin / 100).toFixed(4));
+        setInputs(prev => ({
+          ...prev,
+          targetGrossMargin: Math.min(Math.max(nextMarginRatio, 0.02), 0.95)
+        }));
+      }
+    } else if (customBaseOverride) {
+      const prevOverrideRatio = Number((customBaseOverride.grossMargin / 100).toFixed(4));
+      if (Math.abs(inputs.targetGrossMargin - prevOverrideRatio) < 0.001) {
+        const defaultTargetMargin = (defaultInputs[activeCompany.id] || defaultInputs['tsla']).targetGrossMargin;
+        setInputs(prev => ({
+          ...prev,
+          targetGrossMargin: defaultTargetMargin
+        }));
+      }
+    }
+
+    setCustomBaseOverride(override);
+  };
 
   // Full Deep-Link URL parsing on load (V4.0 Module 6)
   useEffect(() => {
@@ -507,7 +653,7 @@ export const App: React.FC = () => {
       impliedCapYears: micap.capYears,
       memo: activeMemo
     });
-    downloadDynamicIcBrief(`[Eugene_IC投决简报]_${effectiveCompany.ticker}_${basePeriodMode}_V4.0.md`, md);
+    downloadDynamicIcBrief(`[Eugene_IC投决简报]_${effectiveCompany.ticker}_${customBaseOverride ? customBaseOverride.periodLabel : basePeriodMode}_V4.5.md`, md);
   };
 
   return (
@@ -553,6 +699,59 @@ export const App: React.FC = () => {
         isLiveConnected={isLiveConnected}
       />
 
+      {/* Custom Live Filing Override Indicator */}
+      {customBaseOverride && (
+        <div className="max-w-7xl mx-auto px-4 pt-3 w-full">
+          <div className="rounded-xl bg-amber-950/40 border border-amber-500/40 px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs shadow-md">
+            <div className="flex flex-wrap items-center gap-2 font-mono">
+              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 font-bold text-[11px]">
+                <Zap className="w-3 h-3 text-amber-400" />
+                自定义快报基准生效中
+              </span>
+              <span className="font-bold text-amber-200">{customBaseOverride.periodLabel}</span>
+              <span className="text-slate-400">
+                ｜ 出货量 {formatNumber(customBaseOverride.deliveries)} · 单价 {effectiveCompany.currencySymbol}{formatNumber(customBaseOverride.asp)} · 总营收 {effectiveCompany.currencySymbol}{formatNumber(customBaseOverride.totalRevenue)}M · 毛利率 {customBaseOverride.grossMargin.toFixed(1)}%
+              </span>
+            </div>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              {currentStage !== 'disclosures' && (
+                <button
+                  type="button"
+                  onClick={() => setCurrentStage('disclosures')}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-cyan-300 border border-slate-700 text-[11px] font-medium transition-colors"
+                >
+                  <FileSearch className="w-3 h-3" />
+                  <span>修改快报参数</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => handleApplyBaseOverride(null)}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-amber-300 border border-amber-700/50 text-[11px] font-medium transition-colors"
+              >
+                <RotateCcw className="w-3 h-3" />
+                <span>恢复官方年报基准</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 3.5 Executive Verdict & Guided Onboarding Card */}
+      <ExecutiveVerdictBanner
+        company={effectiveCompany}
+        valuation={valuation}
+        inputs={inputs}
+        impliedGrowth={impliedGrowth}
+        impliedMargin={impliedMargin}
+        impliedCapYears={micap.capYears}
+        basePeriodMode={basePeriodMode}
+        memo={activeMemo}
+        onSelectStage={setCurrentStage}
+        onOpenMemo={() => setIsMemoOpen(true)}
+        onOpenPeerDuel={() => setIsPeerDuelOpen(true)}
+      />
+
       {/* 4. Main Stage Content */}
       <main className="max-w-7xl mx-auto px-4 py-6 flex-1 w-full">
         {currentStage === 'disclosures' && (
@@ -560,6 +759,8 @@ export const App: React.FC = () => {
             company={effectiveCompany}
             quarters={quarters}
             onInspect={handleInspect}
+            customBaseOverride={customBaseOverride}
+            onApplyBaseOverride={handleApplyBaseOverride}
           />
         )}
 
@@ -687,12 +888,12 @@ export const App: React.FC = () => {
           <div className="flex items-center gap-2">
             <span className="font-bold text-slate-400">Eugene Finance</span>
             <span>·</span>
-            <span>公司经营、估值与市场隐含预期实验室 (v4.0 二维财报时空、多业务SOTP与同业预期差对决版)</span>
+            <span>公司经营、估值与市场隐含预期实验室 (v4.5 个人投研工作台与全链路闭环版)</span>
           </div>
           <div className="flex items-center gap-4 text-[11px] font-mono">
-            <span>SEC EDGAR XBRL (2023Q1-2025FY)</span>
-            <span>二维时空归因 & SOTP分部估值</span>
-            <span>CAPM宏观利率联动 & 双雄对决</span>
+            <span>SEC EDGAR XBRL &amp; 在线快报覆盖</span>
+            <span>三曲线分部DCF &amp; 30秒投决诊断</span>
+            <span>个人研报工作台 &amp; 2026预测对账</span>
           </div>
         </div>
       </footer>
